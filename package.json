@@ -9,6 +9,8 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@heygen/liveavatar-web-sdk": "^0.0.18",
+    "livekit-client": "^2.19.2",
     "next": "16.2.9",
     "react": "19.2.4",
     "react-dom": "19.2.4"
@@ -22,5 +24,9 @@
     "eslint-config-next": "16.2.9",
     "tailwindcss": "^4",
     "typescript": "^5"
+  },
+  "allowScripts": {
+    "sharp@0.34.5": true,
+    "unrs-resolver@1.12.2": true
   }
 }
