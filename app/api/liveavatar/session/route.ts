@@ -1,7 +1,13 @@
 import { NextResponse } from "next/server";
 
 export async function POST() {
+  const startedAt = Date.now();
+
   try {
+    console.log("[LiveAvatar] Creating session token...");
+
+    const tokenStart = Date.now();
+
     const tokenResponse = await fetch("https://api.liveavatar.com/v1/sessions/token", {
       method: "POST",
       headers: {
@@ -18,13 +24,21 @@ export async function POST() {
       }),
     });
 
+    const tokenMs = Date.now() - tokenStart;
+
     if (!tokenResponse.ok) {
       const error = await tokenResponse.text();
+      console.error("[LiveAvatar] Token error:", error);
       return NextResponse.json({ error }, { status: tokenResponse.status });
     }
 
     const tokenData = await tokenResponse.json();
-console.log("TOKEN DATA:", tokenData);
+
+    console.log(`[LiveAvatar] Token created in ${tokenMs}ms`);
+
+    console.log("[LiveAvatar] Starting session...");
+
+    const sessionStart = Date.now();
 
     const startResponse = await fetch("https://api.liveavatar.com/v1/sessions/start", {
       method: "POST",
@@ -33,21 +47,33 @@ console.log("TOKEN DATA:", tokenData);
       },
     });
 
+    const sessionMs = Date.now() - sessionStart;
+
     if (!startResponse.ok) {
       const error = await startResponse.text();
+      console.error("[LiveAvatar] Start error:", error);
       return NextResponse.json({ error }, { status: startResponse.status });
     }
 
     const startData = await startResponse.json();
 
-   return NextResponse.json({
-  session_id: tokenData.data.session_id,
-  session_token: tokenData.data.session_token,
-  livekit_url: startData.data.livekit_url,
-  livekit_client_token: startData.data.livekit_client_token,
-  raw: startData,
-});
+    console.log(`[LiveAvatar] Session started in ${sessionMs}ms`);
+    console.log(`[LiveAvatar] Total backend time: ${Date.now() - startedAt}ms`);
+
+    return NextResponse.json({
+      session_id: tokenData.data.session_id,
+      session_token: tokenData.data.session_token,
+      livekit_url: startData.data.livekit_url,
+      livekit_client_token: startData.data.livekit_client_token,
+      timing: {
+        token_ms: tokenMs,
+        session_start_ms: sessionMs,
+        total_backend_ms: Date.now() - startedAt,
+      },
+    });
   } catch (error) {
+    console.error("[LiveAvatar] Unexpected error:", error);
+
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Unknown error" },
       { status: 500 }
