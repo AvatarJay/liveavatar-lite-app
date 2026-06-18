@@ -1,10 +1,6 @@
 import OpenAI from "openai";
 import { NextResponse } from "next/server";
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
 const CHEFIT_SYSTEM_PROMPT = `
 You are Chef George, the On-Call Outdoor Chef for Chef-it.
 
@@ -35,6 +31,25 @@ For account issues, direct users to support.
 
 export async function POST(req: Request) {
   try {
+    const apiKey = process.env.OPENAI_API_KEY;
+    const vectorStoreId = process.env.OPENAI_VECTOR_STORE_ID;
+
+    if (!apiKey) {
+      return NextResponse.json(
+        { error: "Missing OPENAI_API_KEY" },
+        { status: 500 }
+      );
+    }
+
+    if (!vectorStoreId) {
+      return NextResponse.json(
+        { error: "Missing OPENAI_VECTOR_STORE_ID" },
+        { status: 500 }
+      );
+    }
+
+    const openai = new OpenAI({ apiKey });
+
     const { question } = await req.json();
 
     if (!question || typeof question !== "string") {
@@ -59,7 +74,7 @@ export async function POST(req: Request) {
       tools: [
         {
           type: "file_search",
-          vector_store_ids: [process.env.OPENAI_VECTOR_STORE_ID!],
+          vector_store_ids: [vectorStoreId],
         },
       ],
     });
