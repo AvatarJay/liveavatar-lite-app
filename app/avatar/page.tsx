@@ -30,7 +30,6 @@ export default function AvatarPage() {
   const [warnedOne, setWarnedOne] = useState(false);
   const [showTranscript, setShowTranscript] = useState(false);
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
-  const [micError, setMicError] = useState("");
 
   const minutes = Math.floor(timeRemaining / 60);
   const seconds = timeRemaining % 60;
@@ -149,18 +148,6 @@ export default function AvatarPage() {
     window.speechSynthesis.speak(utterance);
   }
 
-  async function checkMicrophoneAccess() {
-    if (!navigator.mediaDevices?.getUserMedia) {
-      throw new Error("This browser does not support microphone access.");
-    }
-
-    const micStream = await navigator.mediaDevices.getUserMedia({
-      audio: true,
-    });
-
-    micStream.getTracks().forEach((track) => track.stop());
-  }
-
   useEffect(() => {
     if (!room) return;
 
@@ -194,27 +181,11 @@ export default function AvatarPage() {
   async function startAvatar() {
     if (isStarting || room) return;
 
-    setIsStarting(true);
-    setMicError("");
-    setStatus("Checking microphone...");
-
-    try {
-      await checkMicrophoneAccess();
-    } catch (error) {
-      console.error("[Avatar UI] Microphone permission error:", error);
-
-      setMicError(
-        "Chef-it needs microphone access before starting. Please allow microphone access in your browser, confirm your microphone works, then click Start Session again."
-      );
-      setStatus("Microphone access required.");
-      setIsStarting(false);
-      return;
-    }
-
     const sponsor = sponsors[Math.floor(Math.random() * sponsors.length)];
 
     setCurrentSponsor(sponsor);
     setShowSponsor(true);
+    setIsStarting(true);
     setTranscript([]);
     setTimeRemaining(SESSION_SECONDS);
     setWarnedFive(false);
@@ -276,7 +247,17 @@ export default function AvatarPage() {
       });
 
       await newRoom.connect(data.livekit_url, data.livekit_client_token);
-      await newRoom.localParticipant.setMicrophoneEnabled(true);
+
+      try {
+        await newRoom.localParticipant.setMicrophoneEnabled(true);
+      } catch (error) {
+        console.error("[Avatar UI] Microphone permission denied:", error);
+
+        setStatus("Please allow microphone access and try again.");
+        newRoom.disconnect();
+        setShowSponsor(false);
+        return;
+      }
 
       setRoom(newRoom);
       setShowSponsor(false);
@@ -374,12 +355,6 @@ export default function AvatarPage() {
                   <p className="mt-3 text-zinc-200">
                     Ask about live-fire cooking, recipes, menu costing, and restaurant operations.
                   </p>
-
-                  {micError && (
-                    <div className="mt-5 rounded-xl bg-red-600/90 px-5 py-4 text-sm text-white">
-                      {micError}
-                    </div>
-                  )}
                 </div>
               </div>
             )}
