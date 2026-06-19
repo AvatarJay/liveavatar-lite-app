@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import { Room, RoomEvent, RemoteTrack } from "livekit-client";
 
@@ -30,6 +30,12 @@ export default function AvatarPage() {
   const [warnedOne, setWarnedOne] = useState(false);
   const [showTranscript, setShowTranscript] = useState(false);
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
+  const [trackedSessionId, setTrackedSessionId] = useState<string | null>(null);
+  const [sessionStartedAt, setSessionStartedAt] = useState<number | null>(null);
+
+  const trackedSessionIdRef = useRef<string | null>(null);
+  const sessionStartedAtRef = useRef<number | null>(null);
+  const transcriptRef = useRef<TranscriptEntry[]>([]);
 
   const minutes = Math.floor(timeRemaining / 60);
   const seconds = timeRemaining % 60;
@@ -41,6 +47,10 @@ export default function AvatarPage() {
       : timeRemaining <= 5 * 60
       ? "bg-yellow-400 text-black"
       : "bg-black/65 text-white";
+
+  useEffect(() => {
+    transcriptRef.current = transcript;
+  }, [transcript]);
 
   function addTranscriptEntry(
     speaker: TranscriptEntry["speaker"],
@@ -70,6 +80,74 @@ export default function AvatarPage() {
         },
       ];
     });
+  }
+
+  function buildTranscriptText(entries: TranscriptEntry[]) {
+    return [
+      "CHEF-IT SESSION TRANSCRIPT",
+      `Date: ${new Date().toLocaleString()}`,
+      "",
+      ...entries.map(
+        (entry) => `[${entry.timestamp}] ${entry.speaker}: ${entry.text}`
+      ),
+    ].join("\n");
+  }
+
+  async function startSessionTracking(sponsorName: string) {
+    try {
+      const res = await fetch("/api/sessions/start", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ sponsorName }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        console.error("[Session Tracking Start Failed]", data);
+        return null;
+      }
+
+      return data.sessionId as string;
+    } catch (error) {
+      console.error("[Session Tracking Start Error]", error);
+      return null;
+    }
+  }
+
+  async function endSessionTracking() {
+    const sessionId = trackedSessionIdRef.current;
+    const startedAt = sessionStartedAtRef.current;
+
+    if (!sessionId || !startedAt) return;
+
+    const durationSeconds = Math.max(
+      0,
+      Math.round((Date.now() - startedAt) / 1000)
+    );
+
+    try {
+      await fetch("/api/sessions/end", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          sessionId,
+          durationSeconds,
+          transcript: buildTranscriptText(transcriptRef.current),
+        }),
+      });
+    } catch (error) {
+      console.error("[Session Tracking End Error]", error);
+    }
+
+    trackedSessionIdRef.current = null;
+    sessionStartedAtRef.current = null;
+    setTrackedSessionId(null);
+    setSessionStartedAt(null);
   }
 
   function handleLiveKitData(payload: Uint8Array) {
@@ -154,6 +232,7 @@ export default function AvatarPage() {
     const interval = setInterval(() => {
       setTimeRemaining((prev) => {
         if (prev <= 1) {
+          addTranscriptEntry("System", "Session ended. Time limit reached.");
           stopAvatar();
           return 0;
         }
@@ -187,10 +266,21 @@ export default function AvatarPage() {
     setShowSponsor(true);
     setIsStarting(true);
     setTranscript([]);
+    transcriptRef.current = [];
     setTimeRemaining(SESSION_SECONDS);
     setWarnedFive(false);
     setWarnedOne(false);
     setStatus(`This Chef-it session is brought to you by ${sponsor.name}.`);
+
+    const trackingId = await startSessionTracking(sponsor.name);
+    const startedAt = Date.now();
+
+    if (trackingId) {
+      trackedSessionIdRef.current = trackingId;
+      sessionStartedAtRef.current = startedAt;
+      setTrackedSessionId(trackingId);
+      setSessionStartedAt(startedAt);
+    }
 
     const uiStart = Date.now();
 
@@ -256,6 +346,7 @@ export default function AvatarPage() {
         setStatus("Please allow microphone access and try again.");
         newRoom.disconnect();
         setShowSponsor(false);
+        await endSessionTracking();
         return;
       }
 
@@ -271,28 +362,23 @@ export default function AvatarPage() {
       console.error("[Avatar UI] Start error:", error);
       setStatus("Could not start avatar. Please try again.");
       setShowSponsor(false);
+      await endSessionTracking();
     } finally {
       setIsStarting(false);
     }
   }
 
-  function stopAvatar() {
+  async function stopAvatar() {
     room?.disconnect();
     setRoom(null);
     setShowSponsor(false);
     setStatus("Ready");
     setVideoKey((key) => key + 1);
+    await endSessionTracking();
   }
 
   function downloadTranscript() {
-    const transcriptText = [
-      "CHEF-IT SESSION TRANSCRIPT",
-      `Date: ${new Date().toLocaleString()}`,
-      "",
-      ...transcript.map(
-        (entry) => `[${entry.timestamp}] ${entry.speaker}: ${entry.text}`
-      ),
-    ].join("\n");
+    const transcriptText = buildTranscriptText(transcript);
 
     const blob = new Blob([transcriptText], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
