@@ -420,12 +420,13 @@ export default function AvatarPage() {
         <div className="relative w-full aspect-video bg-zinc-900 rounded-2xl overflow-hidden flex items-center justify-center">
           <div className="absolute top-5 left-5 z-30">
             <Image
-              src="/Chefit-White.png"
-              alt="Chef-it"
-              width={120}
-              height={45}
-              priority
-            />
+  src="/Chefit-White-New.png"
+  alt="Chef-it"
+  width={110}
+  height={40}
+  priority
+  className="h-auto w-auto max-w-[110px]"
+/>
           </div>
 
           <div
