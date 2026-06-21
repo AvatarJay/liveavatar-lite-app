@@ -32,9 +32,16 @@ export default function AvatarPage() {
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
   const [isEmailing, setIsEmailing] = useState(false);
 
+  const [showMicCheck, setShowMicCheck] = useState(false);
+  const [micLevel, setMicLevel] = useState(0);
+  const [micReady, setMicReady] = useState(false);
+  const [micError, setMicError] = useState("");
+
   const trackedSessionIdRef = useRef<string | null>(null);
   const sessionStartedAtRef = useRef<number | null>(null);
   const transcriptRef = useRef<TranscriptEntry[]>([]);
+  const micStreamRef = useRef<MediaStream | null>(null);
+  const animationRef = useRef<number | null>(null);
 
   const minutes = Math.floor(timeRemaining / 60);
   const seconds = timeRemaining % 60;
@@ -50,6 +57,71 @@ export default function AvatarPage() {
   useEffect(() => {
     transcriptRef.current = transcript;
   }, [transcript]);
+
+  function stopMicCheck() {
+    if (animationRef.current) cancelAnimationFrame(animationRef.current);
+    animationRef.current = null;
+
+    micStreamRef.current?.getTracks().forEach((track) => track.stop());
+    micStreamRef.current = null;
+
+    setMicLevel(0);
+  }
+
+  async function beginMicCheck() {
+    setShowMicCheck(true);
+    setMicReady(false);
+    setMicError("");
+    setStatus("Checking microphone...");
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      micStreamRef.current = stream;
+
+      const audioContext = new AudioContext();
+      const analyser = audioContext.createAnalyser();
+      const source = audioContext.createMediaStreamSource(stream);
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+      source.connect(analyser);
+      analyser.fftSize = 256;
+
+      const animate = () => {
+        analyser.getByteFrequencyData(dataArray);
+
+        const average =
+          dataArray.reduce((sum, value) => sum + value, 0) / dataArray.length;
+
+        const level = Math.min(100, Math.round(average * 2.5));
+        setMicLevel(level);
+
+        if (level > 8) setMicReady(true);
+
+        animationRef.current = requestAnimationFrame(animate);
+      };
+
+      animate();
+    } catch (error) {
+      console.error("[Mic Check Error]", error);
+      setMicError(
+        "We could not access your microphone. Please allow microphone access in your browser, then try again."
+      );
+      setStatus("Microphone access needed.");
+    }
+  }
+
+  async function continueAfterMicCheck() {
+    stopMicCheck();
+    setShowMicCheck(false);
+    await startAvatar();
+  }
+
+  function cancelMicCheck() {
+    stopMicCheck();
+    setShowMicCheck(false);
+    setMicReady(false);
+    setStatus("Ready");
+  }
 
   function addTranscriptEntry(speaker: TranscriptEntry["speaker"], text: string) {
     if (!text || !text.trim()) return;
@@ -420,13 +492,13 @@ export default function AvatarPage() {
         <div className="relative w-full aspect-video bg-zinc-900 rounded-2xl overflow-hidden flex items-center justify-center">
           <div className="absolute top-5 left-5 z-30">
             <Image
-  src="/Chefit-White-New.png"
-  alt="Chef-it"
-  width={110}
-  height={40}
-  priority
-  className="h-auto w-auto max-w-[110px]"
-/>
+              src="/Chefit-White-New.png"
+              alt="Chef-it"
+              width={110}
+              height={40}
+              priority
+              className="h-auto w-auto max-w-[110px]"
+            />
           </div>
 
           <div
@@ -440,7 +512,7 @@ export default function AvatarPage() {
             id="avatar-video"
             className="absolute inset-0 flex items-center justify-center text-center"
           >
-            {!room && !showSponsor && (
+            {!room && !showSponsor && !showMicCheck && (
               <div className="absolute inset-0 flex items-center justify-center">
                 <Image
                   src="/george-thumbnail.jpg"
@@ -463,6 +535,64 @@ export default function AvatarPage() {
               </div>
             )}
           </div>
+
+          {showMicCheck && (
+            <div className="absolute inset-0 z-40 bg-black/90 flex flex-col items-center justify-center text-center px-8">
+              <Image
+                src="/Chefit-White-New.png"
+                alt="Chef-it"
+                width={150}
+                height={55}
+                priority
+                className="h-auto w-auto max-w-[150px]"
+              />
+
+              <h2 className="mt-6 text-3xl font-bold">Microphone Check</h2>
+
+              <p className="mt-3 max-w-xl text-zinc-300">
+                Speak normally for a few seconds. When Chef-it hears your microphone,
+                the meter below will move.
+              </p>
+
+              <div className="mt-8 w-full max-w-md rounded-full bg-zinc-800 overflow-hidden h-5">
+                <div
+                  className={`h-full transition-all ${
+                    micReady ? "bg-green-500" : "bg-white"
+                  }`}
+                  style={{ width: `${micLevel}%` }}
+                />
+              </div>
+
+              <p className="mt-4 text-sm">
+                {micError
+                  ? micError
+                  : micReady
+                  ? "✓ Microphone detected. You're ready to talk with Chef George."
+                  : "Listening for your microphone..."}
+              </p>
+
+              <div className="mt-8 flex gap-4">
+                <button
+                  onClick={cancelMicCheck}
+                  className="px-6 py-3 rounded-full font-semibold bg-zinc-700 text-white"
+                >
+                  Cancel
+                </button>
+
+                <button
+                  onClick={continueAfterMicCheck}
+                  disabled={!micReady || !!micError}
+                  className={`px-6 py-3 rounded-full font-semibold ${
+                    micReady && !micError
+                      ? "bg-white text-black"
+                      : "bg-zinc-700 text-zinc-400 cursor-not-allowed"
+                  }`}
+                >
+                  Continue to Chef George
+                </button>
+              </div>
+            </div>
+          )}
 
           {showSponsor && (
             <div className="absolute inset-0 z-20 bg-black/90 flex flex-col items-center justify-center text-center px-8">
@@ -495,11 +625,11 @@ export default function AvatarPage() {
             </div>
           )}
 
-          {!showSponsor && (
+          {!showSponsor && !showMicCheck && (
             <div className="absolute bottom-5 left-0 right-0 z-30 flex justify-center">
               <div className="flex gap-4">
                 <button
-                  onClick={startAvatar}
+                  onClick={beginMicCheck}
                   disabled={startDisabled}
                   className={`px-6 py-3 rounded-full font-semibold ${
                     startDisabled
