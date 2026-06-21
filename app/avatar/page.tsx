@@ -483,26 +483,26 @@ export default function AvatarPage() {
   const startDisabled = isStarting || !!room;
 
   return (
-    <main className="min-h-screen bg-black text-white flex flex-col items-center justify-center p-6">
+    <main className="min-h-screen bg-black text-white flex flex-col items-center justify-center px-3 py-4 sm:p-6">
       <div className="w-full max-w-5xl">
-        <h1 className="text-3xl md:text-4xl font-bold text-center mb-6">
+        <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold text-center mb-4 sm:mb-6">
           Welcome to Chef-it
         </h1>
 
-        <div className="relative w-full aspect-video bg-zinc-900 rounded-2xl overflow-hidden flex items-center justify-center">
-          <div className="absolute top-5 left-5 z-30">
+        <div className="relative w-full h-[78vh] min-h-[620px] sm:h-auto sm:aspect-video bg-zinc-900 rounded-2xl overflow-hidden flex items-center justify-center">
+          <div className="absolute top-3 left-3 sm:top-5 sm:left-5 z-30">
             <Image
               src="/Chefit-White-New.png"
               alt="Chef-it"
               width={110}
               height={40}
               priority
-              className="h-auto w-auto max-w-[110px]"
+              className="h-auto w-auto max-w-[88px] sm:max-w-[110px]"
             />
           </div>
 
           <div
-            className={`absolute top-5 right-5 z-30 rounded-full px-4 py-2 text-sm font-semibold ${timerColor}`}
+            className={`absolute top-3 right-3 sm:top-5 sm:right-5 z-30 rounded-full px-3 py-1.5 sm:px-4 sm:py-2 text-xs sm:text-sm font-semibold ${timerColor}`}
           >
             {room ? formattedTime : isStarting ? "Starting" : "Ready"}
           </div>
@@ -524,11 +524,11 @@ export default function AvatarPage() {
 
                 <div className="absolute inset-0 bg-black/35" />
 
-                <div className="relative z-10 px-6 max-w-2xl mx-auto">
-                  <p className="text-3xl font-bold text-white">
+                <div className="relative z-10 px-6 max-w-sm sm:max-w-2xl mx-auto">
+                  <p className="text-2xl sm:text-3xl font-bold text-white">
                     Meet Chef George
                   </p>
-                  <p className="mt-3 text-zinc-200">
+                  <p className="mt-3 text-sm sm:text-base text-zinc-200">
                     Ask about live-fire cooking, recipes, menu costing, and restaurant operations.
                   </p>
                 </div>
@@ -537,24 +537,26 @@ export default function AvatarPage() {
           </div>
 
           {showMicCheck && (
-            <div className="absolute inset-0 z-40 bg-black/90 flex flex-col items-center justify-center text-center px-8">
+            <div className="absolute inset-0 z-40 bg-black/90 flex flex-col items-center justify-center text-center px-5 sm:px-8">
               <Image
                 src="/Chefit-White-New.png"
                 alt="Chef-it"
                 width={150}
                 height={55}
                 priority
-                className="h-auto w-auto max-w-[150px]"
+                className="h-auto w-auto max-w-[125px] sm:max-w-[150px]"
               />
 
-              <h2 className="mt-6 text-3xl font-bold">Microphone Check</h2>
+              <h2 className="mt-5 sm:mt-6 text-2xl sm:text-3xl font-bold">
+                Microphone Check
+              </h2>
 
-              <p className="mt-3 max-w-xl text-zinc-300">
+              <p className="mt-3 max-w-sm sm:max-w-xl text-sm sm:text-base text-zinc-300">
                 Speak normally for a few seconds. When Chef-it hears your microphone,
                 the meter below will move.
               </p>
 
-              <div className="mt-8 w-full max-w-md rounded-full bg-zinc-800 overflow-hidden h-5">
+              <div className="mt-7 sm:mt-8 w-full max-w-sm sm:max-w-md rounded-full bg-zinc-800 overflow-hidden h-5">
                 <div
                   className={`h-full transition-all ${
                     micReady ? "bg-green-500" : "bg-white"
@@ -563,7 +565,7 @@ export default function AvatarPage() {
                 />
               </div>
 
-              <p className="mt-4 text-sm">
+              <p className="mt-4 text-sm max-w-sm text-zinc-300">
                 {micError
                   ? micError
                   : micReady
@@ -571,10 +573,10 @@ export default function AvatarPage() {
                   : "Listening for your microphone..."}
               </p>
 
-              <div className="mt-8 flex gap-4">
+              <div className="mt-7 sm:mt-8 flex flex-col sm:flex-row gap-3 sm:gap-4 w-full max-w-sm sm:max-w-none sm:w-auto">
                 <button
                   onClick={cancelMicCheck}
-                  className="px-6 py-3 rounded-full font-semibold bg-zinc-700 text-white"
+                  className="w-full sm:w-auto px-6 py-3 rounded-full font-semibold bg-zinc-700 text-white"
                 >
                   Cancel
                 </button>
@@ -582,7 +584,7 @@ export default function AvatarPage() {
                 <button
                   onClick={continueAfterMicCheck}
                   disabled={!micReady || !!micError}
-                  className={`px-6 py-3 rounded-full font-semibold ${
+                  className={`w-full sm:w-auto px-6 py-3 rounded-full font-semibold ${
                     micReady && !micError
                       ? "bg-white text-black"
                       : "bg-zinc-700 text-zinc-400 cursor-not-allowed"
@@ -595,43 +597,43 @@ export default function AvatarPage() {
           )}
 
           {showSponsor && (
-            <div className="absolute inset-0 z-20 bg-black/90 flex flex-col items-center justify-center text-center px-8">
-              <p className="text-sm uppercase tracking-[0.25em] text-zinc-400">
+            <div className="absolute inset-0 z-20 bg-black/90 flex flex-col items-center justify-center text-center px-5 sm:px-8">
+              <p className="text-[10px] sm:text-sm uppercase tracking-[0.18em] sm:tracking-[0.25em] text-zinc-400">
                 This Chef-it session is brought to you by
               </p>
 
-              <div className="mt-6 rounded-2xl bg-white p-6">
+              <div className="mt-5 sm:mt-6 rounded-2xl bg-white p-4 sm:p-6 max-w-[85%]">
                 <Image
                   src={currentSponsor.logo}
                   alt={currentSponsor.name}
                   width={380}
                   height={160}
                   priority
-                  className="max-h-40 w-auto object-contain"
+                  className="max-h-28 sm:max-h-40 w-auto object-contain"
                 />
               </div>
 
-              <h2 className="mt-6 text-3xl font-bold">
+              <h2 className="mt-5 sm:mt-6 text-2xl sm:text-3xl font-bold">
                 {currentSponsor.name}
               </h2>
 
-              <p className="mt-6 text-lg text-zinc-300">
+              <p className="mt-5 sm:mt-6 text-base sm:text-lg text-zinc-300">
                 Preparing your Chef-it session...
               </p>
 
-              <p className="mt-2 text-zinc-500">
+              <p className="mt-2 text-sm sm:text-base text-zinc-500">
                 The On-Call Outdoor Chef is getting ready.
               </p>
             </div>
           )}
 
           {!showSponsor && !showMicCheck && (
-            <div className="absolute bottom-5 left-0 right-0 z-30 flex justify-center">
-              <div className="flex gap-4">
+            <div className="absolute bottom-4 sm:bottom-5 left-0 right-0 z-30 flex justify-center px-4">
+              <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 w-full max-w-sm sm:max-w-none sm:w-auto">
                 <button
                   onClick={beginMicCheck}
                   disabled={startDisabled}
-                  className={`px-6 py-3 rounded-full font-semibold ${
+                  className={`w-full sm:w-auto px-6 py-3 rounded-full font-semibold ${
                     startDisabled
                       ? "bg-zinc-500 text-zinc-300 cursor-not-allowed"
                       : "bg-white text-black"
@@ -647,7 +649,7 @@ export default function AvatarPage() {
                 <button
                   onClick={stopAvatar}
                   disabled={!room}
-                  className={`px-6 py-3 rounded-full font-semibold ${
+                  className={`w-full sm:w-auto px-6 py-3 rounded-full font-semibold ${
                     room
                       ? "bg-red-600 text-white"
                       : "bg-zinc-800 text-zinc-500 cursor-not-allowed"
@@ -658,7 +660,7 @@ export default function AvatarPage() {
 
                 <button
                   onClick={() => setShowTranscript(true)}
-                  className="px-6 py-3 rounded-full font-semibold bg-zinc-700 text-white"
+                  className="w-full sm:w-auto px-6 py-3 rounded-full font-semibold bg-zinc-700 text-white"
                 >
                   Transcript
                 </button>
@@ -667,10 +669,12 @@ export default function AvatarPage() {
           )}
 
           {showTranscript && (
-            <div className="absolute inset-0 z-50 bg-black/80 flex items-center justify-center p-6">
-              <div className="bg-zinc-950 border border-zinc-700 rounded-2xl w-full max-w-3xl max-h-[80%] overflow-hidden flex flex-col">
-                <div className="flex items-center justify-between p-5 border-b border-zinc-800">
-                  <h2 className="text-xl font-bold">Session Transcript</h2>
+            <div className="absolute inset-0 z-50 bg-black/80 flex items-center justify-center p-3 sm:p-6">
+              <div className="bg-zinc-950 border border-zinc-700 rounded-2xl w-full max-w-3xl h-[92%] sm:max-h-[80%] overflow-hidden flex flex-col">
+                <div className="flex items-center justify-between p-4 sm:p-5 border-b border-zinc-800">
+                  <h2 className="text-lg sm:text-xl font-bold">
+                    Session Transcript
+                  </h2>
                   <button
                     onClick={() => setShowTranscript(false)}
                     className="text-zinc-400 hover:text-white"
@@ -679,7 +683,7 @@ export default function AvatarPage() {
                   </button>
                 </div>
 
-                <div className="p-5 overflow-y-auto text-left space-y-4">
+                <div className="p-4 sm:p-5 overflow-y-auto text-left space-y-4">
                   {transcript.length === 0 ? (
                     <p className="text-zinc-400">
                       No transcript has been captured yet.
@@ -691,17 +695,19 @@ export default function AvatarPage() {
                           {entry.timestamp}
                         </p>
                         <p className="font-semibold">{entry.speaker}</p>
-                        <p className="text-zinc-300">{entry.text}</p>
+                        <p className="text-sm sm:text-base text-zinc-300">
+                          {entry.text}
+                        </p>
                       </div>
                     ))
                   )}
                 </div>
 
-                <div className="p-5 border-t border-zinc-800 flex justify-end gap-3">
+                <div className="p-4 sm:p-5 border-t border-zinc-800 flex flex-col sm:flex-row justify-end gap-3">
                   <button
                     onClick={downloadTranscript}
                     disabled={transcript.length === 0}
-                    className={`px-5 py-3 rounded-full font-semibold ${
+                    className={`w-full sm:w-auto px-5 py-3 rounded-full font-semibold ${
                       transcript.length === 0
                         ? "bg-zinc-800 text-zinc-500 cursor-not-allowed"
                         : "bg-white text-black"
@@ -713,7 +719,7 @@ export default function AvatarPage() {
                   <button
                     onClick={emailTranscript}
                     disabled={transcript.length === 0 || isEmailing}
-                    className={`px-5 py-3 rounded-full font-semibold ${
+                    className={`w-full sm:w-auto px-5 py-3 rounded-full font-semibold ${
                       transcript.length === 0 || isEmailing
                         ? "bg-zinc-800 text-zinc-500 cursor-not-allowed"
                         : "bg-white text-black"
