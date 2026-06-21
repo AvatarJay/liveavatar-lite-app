@@ -30,8 +30,7 @@ export default function AvatarPage() {
   const [warnedOne, setWarnedOne] = useState(false);
   const [showTranscript, setShowTranscript] = useState(false);
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
-  const [trackedSessionId, setTrackedSessionId] = useState<string | null>(null);
-  const [sessionStartedAt, setSessionStartedAt] = useState<number | null>(null);
+  const [isEmailing, setIsEmailing] = useState(false);
 
   const trackedSessionIdRef = useRef<string | null>(null);
   const sessionStartedAtRef = useRef<number | null>(null);
@@ -52,10 +51,7 @@ export default function AvatarPage() {
     transcriptRef.current = transcript;
   }, [transcript]);
 
-  function addTranscriptEntry(
-    speaker: TranscriptEntry["speaker"],
-    text: string
-  ) {
+  function addTranscriptEntry(speaker: TranscriptEntry["speaker"], text: string) {
     if (!text || !text.trim()) return;
 
     const cleanText = text.trim();
@@ -97,9 +93,7 @@ export default function AvatarPage() {
     try {
       const res = await fetch("/api/sessions/start", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sponsorName }),
       });
 
@@ -131,9 +125,7 @@ export default function AvatarPage() {
     try {
       await fetch("/api/sessions/end", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           sessionId,
           durationSeconds,
@@ -146,8 +138,6 @@ export default function AvatarPage() {
 
     trackedSessionIdRef.current = null;
     sessionStartedAtRef.current = null;
-    setTrackedSessionId(null);
-    setSessionStartedAt(null);
   }
 
   function handleLiveKitData(payload: Uint8Array) {
@@ -278,8 +268,6 @@ export default function AvatarPage() {
     if (trackingId) {
       trackedSessionIdRef.current = trackingId;
       sessionStartedAtRef.current = startedAt;
-      setTrackedSessionId(trackingId);
-      setSessionStartedAt(startedAt);
     }
 
     const uiStart = Date.now();
@@ -379,7 +367,6 @@ export default function AvatarPage() {
 
   function downloadTranscript() {
     const transcriptText = buildTranscriptText(transcript);
-
     const blob = new Blob([transcriptText], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
 
@@ -389,6 +376,36 @@ export default function AvatarPage() {
     link.click();
 
     URL.revokeObjectURL(url);
+  }
+
+  async function emailTranscript() {
+    const email = prompt("Send transcript to which email?");
+
+    if (!email) return;
+
+    setIsEmailing(true);
+
+    try {
+      const res = await fetch("/api/email-transcript", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email,
+          transcript: buildTranscriptText(transcript),
+        }),
+      });
+
+      if (!res.ok) {
+        throw new Error("Email failed");
+      }
+
+      alert("Transcript emailed successfully!");
+    } catch (error) {
+      console.error("[Email Transcript Error]", error);
+      alert("Could not send transcript.");
+    } finally {
+      setIsEmailing(false);
+    }
   }
 
   const startDisabled = isStarting || !!room;
@@ -562,8 +579,16 @@ export default function AvatarPage() {
                     Download Transcript
                   </button>
 
-                  <button className="px-5 py-3 rounded-full font-semibold bg-zinc-800 text-zinc-500 cursor-not-allowed">
-                    Email Coming Soon
+                  <button
+                    onClick={emailTranscript}
+                    disabled={transcript.length === 0 || isEmailing}
+                    className={`px-5 py-3 rounded-full font-semibold ${
+                      transcript.length === 0 || isEmailing
+                        ? "bg-zinc-800 text-zinc-500 cursor-not-allowed"
+                        : "bg-white text-black"
+                    }`}
+                  >
+                    {isEmailing ? "Sending..." : "Email Transcript"}
                   </button>
                 </div>
               </div>
