@@ -489,7 +489,7 @@ export default function AvatarPage() {
           Welcome to Chef-it
         </h1>
 
-        <div className="relative w-full h-[78vh] min-h-[620px] sm:h-auto sm:aspect-video bg-zinc-900 rounded-2xl overflow-hidden flex items-center justify-center">
+        <div className="relative w-full h-[78vh] min-h-[620px] sm:h-auto sm:aspect-video bg-zinc-900 rounded-2xl overflow-hidden flex items-center justify-center [&_video]:object-cover [&_video]:object-center">
           <div className="absolute top-3 left-3 sm:top-5 sm:left-5 z-30">
             <Image
               src="/Chefit-White-New.png"
@@ -519,7 +519,7 @@ export default function AvatarPage() {
                   alt="Chef George"
                   fill
                   priority
-                  className="object-cover opacity-70"
+                  className="object-cover object-center opacity-70"
                 />
 
                 <div className="absolute inset-0 bg-black/35" />
