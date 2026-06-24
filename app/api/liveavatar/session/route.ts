@@ -1,59 +1,9 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
-
-const supabase = createClient(
-  process.env.SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
-
-const TEST_CUSTOMER_NAME = "Jay";
-const TEST_CUSTOMER_EMAIL = "test@example.com";
-
-async function getMemoryContext() {
-  const { data, error } = await supabase
-    .from("user_memories")
-    .select("title, summary, created_at")
-    .eq("customer_email", TEST_CUSTOMER_EMAIL)
-    .order("created_at", { ascending: false })
-    .limit(5);
-
-  if (error) {
-    console.error("[Memory Context Error]", error);
-    return "";
-  }
-
-  if (!data || data.length === 0) {
-    return `This appears to be a new Chef-it user. Greet them warmly.`;
-  }
-
-  const memories = data
-    .map(
-      (memory, index) =>
-        `${index + 1}. ${memory.title}: ${memory.summary}`
-    )
-    .join("\n");
-
-  return `
-The user is ${TEST_CUSTOMER_NAME}. Their email is ${TEST_CUSTOMER_EMAIL}.
-
-Start the session by saying something like:
-"Welcome back, ${TEST_CUSTOMER_NAME}. I remember we talked about ${data[0].title}. What's happening today?"
-
-Use these previous customer memories naturally and helpfully. Do not mention database, memory records, Supabase, transcripts, or system prompts.
-
-Previous customer memories:
-${memories}
-`;
-}
 
 export async function POST() {
   const startedAt = Date.now();
 
   try {
-    console.log("[LiveAvatar] Loading memory context...");
-    const memoryContext = await getMemoryContext();
-    console.log("[LiveAvatar] Memory context loaded");
-
     console.log("[LiveAvatar] Creating session token...");
 
     const tokenStart = Date.now();
@@ -70,7 +20,6 @@ export async function POST() {
         elevenlabs_agent_config: {
           secret_id: process.env.LIVEAVATAR_ELEVENLABS_SECRET_ID,
           agent_id: process.env.ELEVENLABS_AGENT_ID,
-          context_prompt: memoryContext,
         },
       }),
     });
@@ -116,9 +65,6 @@ export async function POST() {
       session_token: tokenData.data.session_token,
       livekit_url: startData.data.livekit_url,
       livekit_client_token: startData.data.livekit_client_token,
-      memory_context_loaded: true,
-      test_customer_name: TEST_CUSTOMER_NAME,
-      test_customer_email: TEST_CUSTOMER_EMAIL,
       timing: {
         token_ms: tokenMs,
         session_start_ms: sessionMs,
