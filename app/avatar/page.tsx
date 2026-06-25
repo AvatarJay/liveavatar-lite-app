@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import { Room, RoomEvent, RemoteTrack } from "livekit-client";
 
-const SESSION_SECONDS = 20 * 60;
+const SESSION_SECONDS = 5 * 60;
 
 const sponsors = [
   { name: "State Farm Agent Marty Saiz", logo: "/marty-saiz.jpg" },
@@ -57,11 +57,11 @@ export default function AvatarPage() {
   const formattedTime = `${minutes}:${seconds.toString().padStart(2, "0")}`;
 
   const timerColor =
-    timeRemaining <= 60
-      ? "bg-red-600 text-white"
-      : timeRemaining <= 5 * 60
-      ? "bg-yellow-400 text-black"
-      : "bg-black/65 text-white";
+  timeRemaining <= 60
+    ? "bg-red-600 text-white"
+    : room
+    ? "bg-black/65 text-white"
+    : "bg-black/65 text-white";
 
   useEffect(() => {
     transcriptRef.current = transcript;
@@ -78,8 +78,9 @@ export default function AvatarPage() {
   }
 
   async function beginMicCheck() {
-    setShowMicCheck(true);
-    setMicReady(false);
+    perfStartRef.current = Date.now();
+    perfLog("Start Session clicked");
+    setShowMicCheck(true);    setMicReady(false);
     setMicError("");
     setStatus("Checking microphone...");
 
@@ -119,11 +120,12 @@ export default function AvatarPage() {
     }
   }
 
-  async function continueAfterMicCheck() {
-    stopMicCheck();
-    setShowMicCheck(false);
-    await startAvatar();
-  }
+   async function continueAfterMicCheck() {
+     perfLog("Microphone check complete");
+     stopMicCheck();
+     setShowMicCheck(false);
+     await startAvatar();
+   }
 
   function cancelMicCheck() {
     stopMicCheck();
@@ -298,39 +300,42 @@ export default function AvatarPage() {
   }
 
   useEffect(() => {
-    if (!room) return;
+  if (!room) return;
 
-    const interval = setInterval(() => {
-      setTimeRemaining((prev) => {
-        if (prev <= 1) {
-          addTranscriptEntry("System", "Session ended. Time limit reached.");
-          stopAvatar();
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
+  const interval = setInterval(async () => {
+    const data = await spendOneSecond();
 
-    return () => clearInterval(interval);
-  }, [room]);
-
-  useEffect(() => {
-    if (!room) return;
-
-    if (timeRemaining === 5 * 60 && !warnedFive) {
-      setWarnedFive(true);
-      speakNotice("You have five minutes remaining in this Chef-it session.");
+    if (!data) {
+      clearInterval(interval);
+      return;
     }
 
-    if (timeRemaining === 60 && !warnedOne) {
-      setWarnedOne(true);
-      speakNotice("You have one minute remaining in this Chef-it session.");
+    const remaining = Number(data.remaining || 0);
+
+    setTimeRemaining(remaining);
+
+    if (remaining <= 0) {
+      addTranscriptEntry("System", "Session ended. Minute balance reached zero.");
+      clearInterval(interval);
+      stopAvatar();
     }
-  }, [timeRemaining, room, warnedFive, warnedOne]);
+  }, 1000);
+
+  return () => clearInterval(interval);
+}, [room]);
+
+useEffect(() => {
+  if (!room) return;
+
+  if (timeRemaining === 60 && !warnedOne) {
+    setWarnedOne(true);
+    speakNotice("You have one minute remaining in this Chef-it session.");
+  }
+}, [timeRemaining, room, warnedOne]);
 
   async function startAvatar() {
     if (isStarting || room) return;
-
+    perfLog("startAvatar called");
     const sponsor = sponsors[Math.floor(Math.random() * sponsors.length)];
 
     setCurrentSponsor(sponsor);
@@ -338,12 +343,13 @@ export default function AvatarPage() {
     setIsStarting(true);
     setTranscript([]);
     transcriptRef.current = [];
-    setTimeRemaining(SESSION_SECONDS);
     setWarnedFive(false);
     setWarnedOne(false);
     setStatus(`This Chef-it session is brought to you by ${sponsor.name}.`);
 
+    perfLog("Starting Supabase session tracking");
     const trackingId = await startSessionTracking(sponsor.name);
+    perfLog("Supabase session tracking complete");
     const startedAt = Date.now();
 
     if (trackingId) {
@@ -354,9 +360,11 @@ export default function AvatarPage() {
     const uiStart = Date.now();
 
     try {
+      perfLog("Requesting LiveAvatar session");
       const res = await fetch("/api/liveavatar/session", { method: "POST" });
       const data = await res.json();
-
+      perfLog("LiveAvatar session response received");
+      console.log("[Perf] Backend timing:", data.timing);
       if (!res.ok) {
         console.error(data);
         setStatus("Error creating session");
@@ -376,10 +384,12 @@ export default function AvatarPage() {
         const element = track.attach();
 
         console.log(
-          `[Avatar UI] First ${track.kind} track received after ${
-            Date.now() - uiStart
-          }ms`
-        );
+           `[Avatar UI] First ${track.kind} track received after ${
+           Date.now() - uiStart
+           }ms`
+      );
+
+      perfLog(`First ${track.kind} track subscribed`);
 
         if (track.kind === "video") {
           const container = document.getElementById("avatar-video");
@@ -405,10 +415,13 @@ export default function AvatarPage() {
         }
       });
 
-      await newRoom.connect(data.livekit_url, data.livekit_client_token);
-
+        perfLog("Connecting to LiveKit");
+        await newRoom.connect(data.livekit_url, data.livekit_client_token);
+        perfLog("LiveKit connected");
       try {
+        perfLog("Enabling LiveKit microphone");
         await newRoom.localParticipant.setMicrophoneEnabled(true);
+        perfLog("LiveKit microphone enabled");
       } catch (error) {
         console.error("[Avatar UI] Microphone permission denied:", error);
 
@@ -488,6 +501,85 @@ export default function AvatarPage() {
       setIsEmailing(false);
     }
   }
+
+async function checkMinuteBalance() {
+  const customerEmail = "jayspangnm@gmail.com";
+
+  try {
+    const res = await fetch("/api/minutes/check", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ email: customerEmail }),
+    });
+
+    const data = await res.json();
+
+    if (!res.ok) {
+      console.error("[Minute Gate Error]", data);
+      alert("We could not check your Chef-it minute balance. Please try again.");
+      return false;
+    }
+
+    if (!data.allowed) {
+      alert(
+        "You do not have any Chef-it minutes remaining. Please purchase more minutes to continue."
+      );
+      return false;
+    }
+
+console.log("[Minute Gate] Time available:", data.display);
+
+const secondsAvailable = Number(data.seconds || 0);
+setTimeRemaining(secondsAvailable);
+
+return true;
+  } catch (error) {
+    console.error("[Minute Gate Error]", error);
+    alert("We could not check your Chef-it minute balance. Please try again.");
+    return false;
+  }
+}
+
+async function spendOneSecond() {
+  const customerEmail = "jayspangnm@gmail.com";
+
+  try {
+    const res = await fetch("/api/minutes/spend", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ email: customerEmail }),
+    });
+
+    const data = await res.json();
+
+    if (!res.ok) {
+      console.error("[Minute Spend Error]", data);
+      return false;
+    }
+
+    if (data.finished) {
+  alert("Your Chef-it minutes have been used up.");
+  stopAvatar();
+}
+
+return data;
+  } catch (err) {
+    console.error("[Minute Spend Error]", err);
+    return null;
+  }
+}
+
+async function beginGatedMicCheck() {
+  const allowed = await checkMinuteBalance();
+
+  if (!allowed) return;
+
+  await beginMicCheck();
+}
 
   const startDisabled = isStarting || !!room;
 
@@ -640,7 +732,7 @@ export default function AvatarPage() {
             <div className="absolute bottom-4 sm:bottom-5 left-0 right-0 z-30 flex justify-center px-4">
               <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 w-full max-w-sm sm:max-w-none sm:w-auto">
                 <button
-                  onClick={beginMicCheck}
+                  onClick={beginGatedMicCheck}
                   disabled={startDisabled}
                   className={`w-full sm:w-auto px-6 py-3 rounded-full font-semibold ${
                     startDisabled
