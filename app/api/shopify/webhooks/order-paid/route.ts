@@ -46,7 +46,6 @@ function getShopifyCustomerId(order: any) {
 
 function getMinutesPurchased(order: any) {
   const lineItems = order.line_items || [];
-
   let totalMinutes = 0;
 
   for (const item of lineItems) {
@@ -73,11 +72,7 @@ export async function POST(req: Request) {
 
     if (!verifyShopifyHmac(rawBody, hmac)) {
       console.error("[Shopify Webhook] Invalid HMAC");
-
-      return NextResponse.json(
-        { error: "Invalid Shopify HMAC" },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: "Invalid Shopify HMAC" }, { status: 401 });
     }
 
     const order = JSON.parse(rawBody);
@@ -86,22 +81,20 @@ export async function POST(req: Request) {
     const customerEmail = getCustomerEmail(order);
     const shopifyCustomerId = getShopifyCustomerId(order);
     const minutesPurchased = getMinutesPurchased(order);
+    const secondsPurchased = minutesPurchased * 60;
 
     console.log("[Shopify Webhook] Verified order:", shopifyOrderId);
     console.log("[Shopify Webhook] Customer email:", customerEmail);
     console.log("[Shopify Webhook] Shopify customer ID:", shopifyCustomerId);
     console.log("[Shopify Webhook] Minutes purchased:", minutesPurchased);
+    console.log("[Shopify Webhook] Seconds purchased:", secondsPurchased);
 
     if (!customerEmail) {
-      return NextResponse.json(
-        { error: "Missing customer email" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Missing customer email" }, { status: 400 });
     }
 
-    if (minutesPurchased <= 0) {
+    if (secondsPurchased <= 0) {
       console.log("[Shopify Webhook] No Chef-it minutes product found.");
-
       return NextResponse.json({
         success: true,
         message: "Order verified, no Chef-it minutes product found.",
@@ -116,7 +109,6 @@ export async function POST(req: Request) {
 
     if (existingPurchase) {
       console.log("[Shopify Webhook] Duplicate order ignored:", shopifyOrderId);
-
       return NextResponse.json({
         success: true,
         message: "Duplicate order ignored.",
@@ -137,31 +129,29 @@ export async function POST(req: Request) {
 
     if (customerError) {
       console.error("[Shopify Webhook] Customer upsert error:", customerError);
-
-      return NextResponse.json(
-        { error: customerError.message },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: customerError.message }, { status: 500 });
     }
 
-    const newBalance =
-      Number(customer.minutes_balance || 0) + minutesPurchased;
+    const currentMinutesBalance = Number(customer.minutes_balance || 0);
+    const currentSecondsBalance = Number(
+      customer.seconds_balance ?? currentMinutesBalance * 60
+    );
+
+    const newMinutesBalance = currentMinutesBalance + minutesPurchased;
+    const newSecondsBalance = currentSecondsBalance + secondsPurchased;
 
     const { error: balanceError } = await supabase
       .from("customers")
       .update({
-        minutes_balance: newBalance,
+        minutes_balance: newMinutesBalance,
+        seconds_balance: newSecondsBalance,
         shopify_customer_id: shopifyCustomerId,
       })
       .eq("id", customer.id);
 
     if (balanceError) {
       console.error("[Shopify Webhook] Balance update error:", balanceError);
-
-      return NextResponse.json(
-        { error: balanceError.message },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: balanceError.message }, { status: 500 });
     }
 
     const { error: purchaseError } = await supabase.from("purchases").insert({
@@ -172,11 +162,7 @@ export async function POST(req: Request) {
 
     if (purchaseError) {
       console.error("[Shopify Webhook] Purchase insert error:", purchaseError);
-
-      return NextResponse.json(
-        { error: purchaseError.message },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: purchaseError.message }, { status: 500 });
     }
 
     const { error: transactionError } = await supabase
@@ -187,19 +173,12 @@ export async function POST(req: Request) {
         type: "credit",
         source: "shopify_order_paid",
         minutes: minutesPurchased,
-        notes: `Shopify order ${shopifyOrderId}`,
+        notes: `Shopify order ${shopifyOrderId}; credited ${secondsPurchased} seconds`,
       });
 
     if (transactionError) {
-      console.error(
-        "[Shopify Webhook] Minute transaction insert error:",
-        transactionError
-      );
-
-      return NextResponse.json(
-        { error: transactionError.message },
-        { status: 500 }
-      );
+      console.error("[Shopify Webhook] Minute transaction insert error:", transactionError);
+      return NextResponse.json({ error: transactionError.message }, { status: 500 });
     }
 
     return NextResponse.json({
@@ -208,11 +187,12 @@ export async function POST(req: Request) {
       customerEmail,
       shopifyCustomerId,
       minutesPurchased,
-      newBalance,
+      secondsPurchased,
+      newMinutesBalance,
+      newSecondsBalance,
     });
   } catch (error) {
     console.error("[Shopify Webhook] Unexpected error:", error);
-
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Unknown error" },
       { status: 500 }

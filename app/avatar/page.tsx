@@ -19,6 +19,7 @@ type TranscriptEntry = {
 };
 
 export default function AvatarPage() {
+  const [customerEmail, setCustomerEmail] = useState("");
   const [status, setStatus] = useState("Ready");
   const [room, setRoom] = useState<Room | null>(null);
   const [isStarting, setIsStarting] = useState(false);
@@ -299,6 +300,28 @@ export default function AvatarPage() {
     window.speechSynthesis.speak(utterance);
   }
 
+useEffect(() => {
+  async function loadCustomerAndWallet() {
+    try {
+      const meRes = await fetch("/api/customer/me");
+      const me = await meRes.json();
+
+      if (!me.authenticated) {
+        window.location.href = "/";
+        return;
+      }
+
+      setCustomerEmail(me.email);
+      await loadWalletBalance(me.email);
+    } catch (error) {
+      console.error("[Customer Load Error]", error);
+      window.location.href = "/";
+    }
+  }
+
+  loadCustomerAndWallet();
+}, []);
+
   useEffect(() => {
   if (!room) return;
 
@@ -501,9 +524,27 @@ useEffect(() => {
       setIsEmailing(false);
     }
   }
+async function loadWalletBalance(email: string) {
 
+  try {
+    const res = await fetch("/api/minutes/check", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ email }),
+    });
+
+    const data = await res.json();
+
+    if (res.ok && data.seconds !== undefined) {
+      setTimeRemaining(Number(data.seconds || 0));
+    }
+  } catch (error) {
+    console.error("[Wallet Balance Load Error]", error);
+  }
+}
 async function checkMinuteBalance() {
-  const customerEmail = "jayspangnm@gmail.com";
 
   try {
     const res = await fetch("/api/minutes/check", {
@@ -543,7 +584,6 @@ return true;
 }
 
 async function spendOneSecond() {
-  const customerEmail = "jayspangnm@gmail.com";
 
   try {
     const res = await fetch("/api/minutes/spend", {
@@ -602,11 +642,19 @@ async function beginGatedMicCheck() {
             />
           </div>
 
-          <div
-            className={`absolute top-3 right-3 sm:top-5 sm:right-5 z-30 rounded-full px-3 py-1.5 sm:px-4 sm:py-2 text-xs sm:text-sm font-semibold ${timerColor}`}
-          >
-            {room ? formattedTime : isStarting ? "Starting" : "Ready"}
-          </div>
+         <div className="absolute top-3 right-3 sm:top-5 sm:right-5 z-30 text-right">
+  <div
+    className={`rounded-full px-3 py-1.5 sm:px-4 sm:py-2 text-xs sm:text-sm font-semibold ${timerColor}`}
+  >
+    {isStarting ? "Starting" : formattedTime}
+  </div>
+
+  {!room && !isStarting && (
+    <p className="mt-1 text-[10px] sm:text-xs text-zinc-300">
+      Available time
+    </p>
+  )}
+</div>
 
           <div
             key={videoKey}
