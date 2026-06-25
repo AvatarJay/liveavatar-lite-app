@@ -42,6 +42,15 @@ export default function AvatarPage() {
   const transcriptRef = useRef<TranscriptEntry[]>([]);
   const micStreamRef = useRef<MediaStream | null>(null);
   const animationRef = useRef<number | null>(null);
+  const perfStartRef = useRef<number>(0);
+
+    function perfLog(label: string) {
+      const elapsed = perfStartRef.current
+        ? `${Date.now() - perfStartRef.current}ms`
+        : "0ms";
+  
+      console.log(`[Perf] ${label}: ${elapsed}`);
+    }
 
   const minutes = Math.floor(timeRemaining / 60);
   const seconds = timeRemaining % 60;
