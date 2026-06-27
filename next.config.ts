@@ -8,7 +8,7 @@ const nextConfig: NextConfig = {
         headers: [
           {
             key: "Content-Security-Policy",
-            value: "frame-ancestors 'self' https://lawnmowergrass.com;",
+            value: "frame-ancestors 'self' https://chasing-the-flames.myshopify.com https://www.chasingtheflames.com https://chasingtheflames.com;",
           },
         ],
       },
@@ -17,3 +17,5 @@ const nextConfig: NextConfig = {
 };
 
 export default nextConfig;
+
+src="https://liveavatar-lite-app.vercel.app/avatar?v=2"
