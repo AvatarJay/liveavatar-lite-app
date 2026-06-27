@@ -17,5 +17,3 @@ const nextConfig: NextConfig = {
 };
 
 export default nextConfig;
-
-src="https://liveavatar-lite-app.vercel.app/avatar?v=2"

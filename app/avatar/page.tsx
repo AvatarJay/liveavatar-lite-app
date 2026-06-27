@@ -305,22 +305,31 @@ export default function AvatarPage() {
 
 useEffect(() => {
   async function loadCustomerAndWallet() {
-    try {
-      const meRes = await fetch("/api/customer/me");
-      const me = await meRes.json();
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const emailFromUrl = params.get("email");
 
-      if (!me.authenticated) {
-        window.location.href = "/";
-        return;
-      }
-
-      setCustomerEmail(me.email);
-      await loadWalletBalance(me.email);
-    } catch (error) {
-      console.error("[Customer Load Error]", error);
-      window.location.href = "/";
+    if (emailFromUrl) {
+      setCustomerEmail(emailFromUrl);
+      await loadWalletBalance(emailFromUrl);
+      return;
     }
+
+    const meRes = await fetch("/api/customer/me");
+    const me = await meRes.json();
+
+    if (!me.authenticated) {
+      window.location.href = "/";
+      return;
+    }
+
+    setCustomerEmail(me.email);
+    await loadWalletBalance(me.email);
+  } catch (error) {
+    console.error("[Customer Load Error]", error);
+    window.location.href = "/";
   }
+}
 
   loadCustomerAndWallet();
 }, []);
