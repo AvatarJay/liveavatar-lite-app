@@ -3,12 +3,13 @@ import { supabase } from "@/lib/supabase";
 
 export async function POST(req: Request) {
   try {
-    const { sponsorName } = await req.json();
+    const { sponsorName, customerEmail } = await req.json();
 
     const { data, error } = await supabase
       .from("sessions")
       .insert({
         sponsor_name: sponsorName || null,
+        customer_email: customerEmail || null,
       })
       .select("id")
       .single();

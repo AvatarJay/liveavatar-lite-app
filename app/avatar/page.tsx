@@ -178,7 +178,10 @@ export default function AvatarPage() {
       const res = await fetch("/api/sessions/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sponsorName }),
+        body: JSON.stringify({
+  sponsorName,
+  customerEmail,
+}),
       });
 
       const data = await res.json();
