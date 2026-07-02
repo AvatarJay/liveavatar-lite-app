@@ -28,7 +28,6 @@ export default function AvatarPage() {
   const [currentSponsor, setCurrentSponsor] = useState(sponsors[0]);
   const [videoKey, setVideoKey] = useState(0);
   const [timeRemaining, setTimeRemaining] = useState(SESSION_SECONDS);
-  const [warnedOne, setWarnedOne] = useState(false);
   const [showTranscript, setShowTranscript] = useState(false);
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
   const [isEmailing, setIsEmailing] = useState(false);
@@ -56,8 +55,10 @@ export default function AvatarPage() {
   const seconds = timeRemaining % 60;
   const formattedTime = `${minutes}:${seconds.toString().padStart(2, "0")}`;
 
-  const timerColor =
-    timeRemaining <= 60 ? "bg-red-600 text-white" : "bg-black/65 text-white";
+const timerColor =
+  room && timeRemaining <= 60
+    ? "bg-red-600 text-white scale-125 animate-pulse shadow-lg"
+    : "bg-black/65 text-white";
 
   useEffect(() => {
     transcriptRef.current = transcript;
@@ -287,13 +288,6 @@ export default function AvatarPage() {
     }
   }
 
-  function speakNotice(message: string) {
-    if (typeof window === "undefined") return;
-    const utterance = new SpeechSynthesisUtterance(message);
-    utterance.rate = 0.95;
-    window.speechSynthesis.speak(utterance);
-  }
-
   useEffect(() => {
     async function loadCustomerAndWallet() {
       try {
@@ -367,15 +361,6 @@ export default function AvatarPage() {
     return () => clearInterval(interval);
   }, [room]);
 
-  useEffect(() => {
-    if (!room) return;
-
-    if (timeRemaining === 60 && !warnedOne) {
-      setWarnedOne(true);
-      speakNotice("You have one minute remaining in this Chef-iT session.");
-    }
-  }, [timeRemaining, room, warnedOne]);
-
   async function startAvatar() {
     if (isStarting || room) return;
 
@@ -389,7 +374,6 @@ export default function AvatarPage() {
     setIsStarting(true);
     setTranscript([]);
     transcriptRef.current = [];
-    setWarnedOne(false);
     setStatus(`This Chef-iT session is brought to you by ${sponsor.name}.`);
 
     perfLog("Starting Supabase session tracking");
@@ -666,7 +650,7 @@ return (
 
         <div className="absolute top-3 right-3 sm:top-5 sm:right-5 z-30 text-right">
           <div
-            className={`rounded-full px-3 py-1.5 sm:px-4 sm:py-2 text-xs sm:text-sm font-semibold ${timerColor}`}
+            className={`rounded-full px-3 py-1.5 sm:px-4 sm:py-2 text-xs sm:text-sm font-semibold transition-all duration-300 ${timerColor}`}
           >
             {isStarting ? "Starting" : formattedTime}
           </div>
@@ -724,6 +708,10 @@ return (
               Speak normally for a few seconds. When Chef-iT hears your microphone,
               the meter below will move.
             </p>
+
+<p className="mt-3 max-w-sm sm:max-w-xl text-xs sm:text-sm text-zinc-400">
+  Having trouble? Click Cancel, check your browser microphone permissions, then come back and try again.
+</p>
 
             <div className="mt-7 sm:mt-8 w-full max-w-sm sm:max-w-md rounded-full bg-zinc-800 overflow-hidden h-5">
               <div
