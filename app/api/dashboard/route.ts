@@ -9,7 +9,7 @@ const supabase = createClient(
 );
 
 const corsHeaders = {
-  "Access-Control-Allow-Origin": "https://chasing-the-flames.myshopify.com",
+  "Access-Control-Allow-Origin": "https://www.chasingtheflames.com",
   "Access-Control-Allow-Methods": "GET, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type",
 };
@@ -68,14 +68,19 @@ const { data: walletActivity } = await supabase
   .order("created_at", { ascending: false })
   .limit(5);
 
-  // Get last session
-  const { data: lastSession } = await supabase
-    .from("sessions")
-    .select("started_at, ended_at, duration_seconds, sponsor_name")
-    .eq("customer_email", email)
-    .order("started_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+// Get recent sessions
+const { data: sessions } = await supabase
+  .from("sessions")
+  .select(`
+    id,
+    started_at,
+    ended_at,
+    duration_seconds,
+    transcript
+  `)
+  .eq("customer_email", email)
+  .order("started_at", { ascending: false })
+  .limit(5);
 
   const seconds = customer.seconds_balance ?? 0;
 
@@ -96,7 +101,7 @@ const { data: walletActivity } = await supabase
 
       recentPurchases: purchases ?? [],
       walletActivity: walletActivity ?? [],
-      lastSession: lastSession,
+      sessions: sessions ?? [],
       membership: "Pay As You Go",
     },
     {

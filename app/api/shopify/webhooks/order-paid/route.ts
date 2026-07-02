@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
+import { Resend } from "resend";
 
 export const runtime = "nodejs";
 
@@ -9,11 +10,12 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
+const resend = new Resend(process.env.RESEND_API_KEY);
+
 const FIVE_MINUTE_PRODUCT_MINUTES = 5;
 
 function verifyShopifyHmac(rawBody: string, hmacHeader: string | null) {
   const secret = process.env.SHOPIFY_WEBHOOK_SECRET;
-
   if (!secret || !hmacHeader) return false;
 
   const digest = crypto
@@ -46,23 +48,55 @@ function getShopifyCustomerId(order: any) {
 
 function getMinutesPurchased(order: any) {
   const lineItems = order.line_items || [];
+
+  const variantMinutes: Record<string, number> = {
+    "53625838403897": 5,
+    "53666967191865": 20,
+    "53666967912761": 60,
+  };
+
   let totalMinutes = 0;
 
   for (const item of lineItems) {
-    const title = `${item.title || ""} ${item.name || ""}`.toLowerCase();
+    const variantId = String(item.variant_id || "");
     const quantity = Number(item.quantity || 1);
+    const minutes = variantMinutes[variantId] || 0;
 
-    if (
-      title.includes("5 minute") ||
-      title.includes("5-minute") ||
-      title.includes("chef-it") ||
-      title.includes("chefit")
-    ) {
-      totalMinutes += FIVE_MINUTE_PRODUCT_MINUTES * quantity;
-    }
+    totalMinutes += minutes * quantity;
   }
 
   return totalMinutes;
+}
+
+async function sendChefItPurchaseEmail(email: string, minutes: number) {
+  await resend.emails.send({
+    from: "Chef-it <onboarding@resend.dev>",
+    to: email,
+    subject: "Welcome to Chef-It — your minutes are ready",
+    html: `
+      <div style="font-family:Arial,Helvetica,sans-serif;background:#050505;padding:32px;color:#ffffff;">
+        <div style="max-width:640px;margin:0 auto;background:#0b0b0f;border:1px solid #27272a;border-radius:18px;padding:32px;">
+          <h1 style="margin-top:0;">👨‍🍳 Welcome to Chef-It!</h1>
+
+          <p>Your purchase was successful, and your <strong>${minutes} minutes</strong> have already been added to your Chef-It Wallet.</p>
+
+          <p>Chef George is standing by whenever you're ready.</p>
+
+          <p style="margin:28px 0;">
+            <a href="https://chasingtheflames.com/pages/chef-it-wallet"
+              style="display:inline-block;background:#8b2d13;color:white;padding:16px 28px;border-radius:8px;text-decoration:none;font-weight:bold;">
+              Open My Chef-It Wallet
+            </a>
+          </p>
+
+          <p>After each session, you'll have the option to download or email yourself a transcript of everything you discussed with Chef George.</p>
+
+          <p style="color:#a1a1aa;">Questions? Reply to this email or visit ChasingTheFlames.com.</p>
+        </div>
+      </div>
+    `,
+    text: `Welcome to Chef-It! Your ${minutes} minutes are ready. Open your wallet: https://chasingtheflames.com/pages/chef-it-wallet`,
+  });
 }
 
 export async function POST(req: Request) {
@@ -179,6 +213,12 @@ export async function POST(req: Request) {
     if (transactionError) {
       console.error("[Shopify Webhook] Minute transaction insert error:", transactionError);
       return NextResponse.json({ error: transactionError.message }, { status: 500 });
+    }
+
+    try {
+      await sendChefItPurchaseEmail(customerEmail, minutesPurchased);
+    } catch (emailError) {
+      console.error("[Shopify Webhook] Purchase email failed:", emailError);
     }
 
     return NextResponse.json({

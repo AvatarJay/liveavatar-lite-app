@@ -37,8 +37,8 @@ useEffect(() => {
       const me = await meRes.json();
 
       if (!me.authenticated) {
-        window.location.href = "/";
-        return;
+        setWallet(null);
+return;
       }
 
       //
@@ -95,20 +95,22 @@ useEffect(() => {
           </p>
 
           <div className="mt-8 flex flex-col sm:flex-row gap-4">
-            <a
-              href="/avatar"
-              className="rounded-full bg-white text-black px-6 py-4 text-center font-semibold"
-            >
-              Start Chef George
-            </a>
-
-            <a
-              href="/"
-              className="rounded-full bg-zinc-800 text-white px-6 py-4 text-center font-semibold"
-            >
-              Buy More Minutes
-            </a>
-          </div>
+  {wallet && wallet.secondsBalance > 0 ? (
+    <a
+      href="/avatar"
+      className="rounded-full bg-white text-black px-6 py-4 text-center font-semibold"
+    >
+      Start Chef George
+    </a>
+  ) : (
+    <a
+      href="https://chasingtheflames.com/products/5-minute-chef-session"
+      className="rounded-full bg-white text-black px-6 py-4 text-center font-semibold"
+    >
+      Buy Chef-It Minutes
+    </a>
+  )}
+</div>
         </section>
 
         <section className="mt-8 grid grid-cols-1 lg:grid-cols-2 gap-6">
