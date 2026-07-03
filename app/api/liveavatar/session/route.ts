@@ -1,10 +1,67 @@
 import { NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
 
-export async function POST() {
+export const runtime = "nodejs";
+
+const supabase = createClient(
+  process.env.SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+);
+
+async function buildCustomerSessionMemory(customerEmail?: string) {
+  if (!customerEmail) return "No useful customer history yet.";
+
+  const { data: sessions, error } = await supabase
+    .from("sessions")
+    .select("started_at, duration_seconds, transcript")
+    .eq("customer_email", customerEmail)
+    .not("transcript", "is", null)
+    .order("started_at", { ascending: false })
+    .limit(3);
+
+  if (error) {
+    console.error("[Session Memory Error]", error);
+    return "No useful customer history yet.";
+  }
+
+  if (!sessions?.length) return "No useful customer history yet.";
+
+  const memoryLines = sessions
+    .map((session, index) => {
+      const userLines = String(session.transcript || "")
+        .split("\n")
+        .filter((line) => line.includes("User:"))
+        .map((line) => line.replace(/^.*User:\s*/i, "").trim())
+        .filter(Boolean)
+        .slice(0, 4);
+
+      if (!userLines.length) return null;
+
+      return `Recent session ${index + 1}: Customer discussed ${userLines.join("; ")}.`;
+    })
+    .filter(Boolean);
+
+  if (!memoryLines.length) return "No useful customer history yet.";
+
+  return [
+    "Recent customer context:",
+    ...memoryLines,
+    "",
+    "Use this only when it naturally helps the conversation.",
+  ].join("\n");
+}
+
+export async function POST(req: Request) {
   const startedAt = Date.now();
 
   try {
+    const body = await req.json().catch(() => ({}));
+    const customerEmail = body?.customerEmail;
+
+    const customerSessionMemory = await buildCustomerSessionMemory(customerEmail);
+
     console.log("[LiveAvatar] Creating session token...");
+    console.log("[LiveAvatar] Session memory:", customerSessionMemory);
 
     const tokenStart = Date.now();
 
@@ -20,6 +77,9 @@ export async function POST() {
         elevenlabs_agent_config: {
           secret_id: process.env.LIVEAVATAR_ELEVENLABS_SECRET_ID,
           agent_id: process.env.ELEVENLABS_AGENT_ID,
+          dynamic_variables: {
+            customer_session_memory: customerSessionMemory,
+          },
         },
       }),
     });
@@ -35,7 +95,6 @@ export async function POST() {
     const tokenData = await tokenResponse.json();
 
     console.log(`[LiveAvatar] Token created in ${tokenMs}ms`);
-
     console.log("[LiveAvatar] Starting session...");
 
     const sessionStart = Date.now();
@@ -56,9 +115,6 @@ export async function POST() {
     }
 
     const startData = await startResponse.json();
-
-    console.log(`[LiveAvatar] Session started in ${sessionMs}ms`);
-    console.log(`[LiveAvatar] Total backend time: ${Date.now() - startedAt}ms`);
 
     return NextResponse.json({
       session_id: tokenData.data.session_id,

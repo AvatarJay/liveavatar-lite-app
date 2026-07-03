@@ -392,7 +392,11 @@ const timerColor =
     try {
       perfLog("Requesting LiveAvatar session");
 
-      const res = await fetch("/api/liveavatar/session", { method: "POST" });
+      const res = await fetch("/api/liveavatar/session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ customerEmail }),
+     });
       const data = await res.json();
 
       perfLog("LiveAvatar session response received");
