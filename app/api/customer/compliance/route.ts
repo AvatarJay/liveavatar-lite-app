@@ -1,12 +1,25 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "https://www.chasingtheflames.com",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
+};
+
+export async function OPTIONS() {
+  return NextResponse.json({}, { headers: corsHeaders });
+}
+
 export async function POST(req: Request) {
   try {
     const { email, action } = await req.json();
 
     if (!email) {
-      return NextResponse.json({ error: "Missing email" }, { status: 400 });
+      return NextResponse.json(
+        { error: "Missing email" },
+        { status: 400, headers: corsHeaders }
+      );
     }
 
     if (action === "accept") {
@@ -25,10 +38,13 @@ export async function POST(req: Request) {
         );
 
       if (error) {
-        return NextResponse.json({ error: error.message }, { status: 500 });
+        return NextResponse.json(
+          { error: error.message },
+          { status: 500, headers: corsHeaders }
+        );
       }
 
-      return NextResponse.json({ verified: true });
+      return NextResponse.json({ verified: true }, { headers: corsHeaders });
     }
 
     const { data, error } = await supabase
@@ -38,16 +54,22 @@ export async function POST(req: Request) {
       .maybeSingle();
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
+      return NextResponse.json(
+        { error: error.message },
+        { status: 500, headers: corsHeaders }
+      );
     }
 
-    return NextResponse.json({
-      verified: Boolean(data?.age_verified_at && data?.terms_accepted_at),
-    });
+    return NextResponse.json(
+      {
+        verified: Boolean(data?.age_verified_at && data?.terms_accepted_at),
+      },
+      { headers: corsHeaders }
+    );
   } catch {
     return NextResponse.json(
       { error: "Compliance check failed" },
-      { status: 500 }
+      { status: 500, headers: corsHeaders }
     );
   }
 }
