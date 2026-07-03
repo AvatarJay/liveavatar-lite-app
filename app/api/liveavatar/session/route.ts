@@ -8,6 +8,44 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
+function getPreferredName(relationship: any) {
+  return (
+    relationship?.identity?.preferred_name ||
+    relationship?.identity?.name ||
+    ""
+  );
+}
+
+function buildFirstMessage(relationship: any) {
+  if (!relationship) {
+    return "Welcome to Chef-it. I'm George Lovato Jr., the On-Call Outdoor Chef. What's happening?";
+  }
+
+  const preferredName = getPreferredName(relationship);
+  const name = preferredName || "there";
+
+  if (!relationship.last_session_at) {
+    return `Welcome back, ${name}. What's happening?`;
+  }
+
+  const lastSession = new Date(relationship.last_session_at).getTime();
+  const now = Date.now();
+  const daysSince = Math.floor((now - lastSession) / (1000 * 60 * 60 * 24));
+
+  if (daysSince >= 30) {
+    return `Welcome back, ${name}. It's been a little while. What's cooking today?`;
+  }
+
+  const greetings = [
+    `Welcome back, ${name}. What's happening?`,
+    `Good to see you again, ${name}. What's cooking today?`,
+    `Hey ${name}, welcome back. What can I help with today?`,
+    `Hi ${name}, what's cooking today?`,
+  ];
+
+  return greetings[Math.floor(Math.random() * greetings.length)];
+}
+
 function formatRelationshipMemory(relationship: any) {
   if (!relationship) {
     return `
@@ -20,10 +58,7 @@ No useful customer history yet.
 `;
   }
 
-  const preferredName =
-    relationship.identity?.preferred_name ||
-    relationship.identity?.name ||
-    "";
+  const preferredName = getPreferredName(relationship);
 
   return `
 First Visit: false
@@ -45,9 +80,6 @@ ${JSON.stringify(relationship.business_profile || {}, null, 2)}
 Culinary Preferences:
 ${JSON.stringify(relationship.culinary_preferences || [], null, 2)}
 
-Dietary Needs:
-${JSON.stringify(relationship.dietary_needs || [], null, 2)}
-
 Equipment:
 ${JSON.stringify(relationship.equipment || [], null, 2)}
 
@@ -66,23 +98,15 @@ ${JSON.stringify(relationship.lessons_learned || [], null, 2)}
 Follow Ups:
 ${JSON.stringify(relationship.follow_ups || [], null, 2)}
 
-Pain Points:
-${JSON.stringify(relationship.pain_points || [], null, 2)}
-
-Relationship Notes:
-${JSON.stringify(relationship.relationship_notes || [], null, 2)}
-
 Last Session Summary:
 ${relationship.last_session_summary || ""}
 `;
 }
 
-async function buildCustomerSessionMemory(customerEmail?: string) {
-  if (!customerEmail) {
-    return formatRelationshipMemory(null);
-  }
+async function getRelationship(customerEmail?: string) {
+  if (!customerEmail) return null;
 
-  const { data: relationship, error } = await supabase
+  const { data, error } = await supabase
     .from("customer_relationships")
     .select("*")
     .eq("customer_email", customerEmail)
@@ -90,10 +114,10 @@ async function buildCustomerSessionMemory(customerEmail?: string) {
 
   if (error) {
     console.error("[Relationship Memory Error]", error);
-    return formatRelationshipMemory(null);
+    return null;
   }
 
-  return formatRelationshipMemory(relationship);
+  return data;
 }
 
 export async function POST(req: Request) {
@@ -103,10 +127,12 @@ export async function POST(req: Request) {
     const body = await req.json().catch(() => ({}));
     const customerEmail = body?.customerEmail;
 
-    const customerSessionMemory =
-      await buildCustomerSessionMemory(customerEmail);
+    const relationship = await getRelationship(customerEmail);
+    const customerSessionMemory = formatRelationshipMemory(relationship);
+    const firstMessage = buildFirstMessage(relationship);
 
     console.log("[LiveAvatar] Creating session token...");
+    console.log("[LiveAvatar] First message:", firstMessage);
     console.log("[LiveAvatar] Relationship memory:", customerSessionMemory);
 
     const tokenStart = Date.now();
@@ -127,6 +153,7 @@ export async function POST(req: Request) {
             agent_id: process.env.ELEVENLABS_AGENT_ID,
             dynamic_variables: {
               customer_session_memory: customerSessionMemory,
+              chefit_first_message: firstMessage,
             },
           },
         }),
