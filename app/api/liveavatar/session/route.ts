@@ -8,47 +8,92 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-async function buildCustomerSessionMemory(customerEmail?: string) {
-  if (!customerEmail) return "No useful customer history yet.";
+function formatRelationshipMemory(relationship: any) {
+  if (!relationship) {
+    return `
+First Visit: true
+Preferred Name:
+Last Session:
 
-  const { data: sessions, error } = await supabase
-    .from("sessions")
-    .select("started_at, duration_seconds, transcript")
-    .eq("customer_email", customerEmail)
-    .not("transcript", "is", null)
-    .order("started_at", { ascending: false })
-    .limit(3);
-
-  if (error) {
-    console.error("[Session Memory Error]", error);
-    return "No useful customer history yet.";
+Customer Relationship Memory:
+No useful customer history yet.
+`;
   }
 
-  if (!sessions?.length) return "No useful customer history yet.";
+  const preferredName =
+    relationship.identity?.preferred_name ||
+    relationship.identity?.name ||
+    "";
 
-  const memoryLines = sessions
-    .map((session, index) => {
-      const userLines = String(session.transcript || "")
-        .split("\n")
-        .filter((line) => line.includes("User:"))
-        .map((line) => line.replace(/^.*User:\s*/i, "").trim())
-        .filter(Boolean)
-        .slice(0, 4);
+  return `
+First Visit: false
+Preferred Name: ${preferredName}
+Last Session: ${relationship.last_session_at || ""}
 
-      if (!userLines.length) return null;
+Customer Relationship Memory:
 
-      return `Recent session ${index + 1}: Customer discussed ${userLines.join("; ")}.`;
-    })
-    .filter(Boolean);
+Customer Type: ${relationship.customer_type || "unknown"}
+Coaching Style: ${relationship.coaching_style || "unknown"}
+Communication Style: ${relationship.communication_style || "unknown"}
 
-  if (!memoryLines.length) return "No useful customer history yet.";
+Identity:
+${JSON.stringify(relationship.identity || {}, null, 2)}
 
-  return [
-    "Recent customer context:",
-    ...memoryLines,
-    "",
-    "Use this only when it naturally helps the conversation.",
-  ].join("\n");
+Business Profile:
+${JSON.stringify(relationship.business_profile || {}, null, 2)}
+
+Culinary Preferences:
+${JSON.stringify(relationship.culinary_preferences || [], null, 2)}
+
+Dietary Needs:
+${JSON.stringify(relationship.dietary_needs || [], null, 2)}
+
+Equipment:
+${JSON.stringify(relationship.equipment || [], null, 2)}
+
+Active Projects:
+${JSON.stringify(relationship.active_projects || [], null, 2)}
+
+Consultant Notes:
+${JSON.stringify(relationship.consultant_notes || [], null, 2)}
+
+Success Stories:
+${JSON.stringify(relationship.success_stories || [], null, 2)}
+
+Lessons Learned:
+${JSON.stringify(relationship.lessons_learned || [], null, 2)}
+
+Follow Ups:
+${JSON.stringify(relationship.follow_ups || [], null, 2)}
+
+Pain Points:
+${JSON.stringify(relationship.pain_points || [], null, 2)}
+
+Relationship Notes:
+${JSON.stringify(relationship.relationship_notes || [], null, 2)}
+
+Last Session Summary:
+${relationship.last_session_summary || ""}
+`;
+}
+
+async function buildCustomerSessionMemory(customerEmail?: string) {
+  if (!customerEmail) {
+    return formatRelationshipMemory(null);
+  }
+
+  const { data: relationship, error } = await supabase
+    .from("customer_relationships")
+    .select("*")
+    .eq("customer_email", customerEmail)
+    .maybeSingle();
+
+  if (error) {
+    console.error("[Relationship Memory Error]", error);
+    return formatRelationshipMemory(null);
+  }
+
+  return formatRelationshipMemory(relationship);
 }
 
 export async function POST(req: Request) {
@@ -58,31 +103,35 @@ export async function POST(req: Request) {
     const body = await req.json().catch(() => ({}));
     const customerEmail = body?.customerEmail;
 
-    const customerSessionMemory = await buildCustomerSessionMemory(customerEmail);
+    const customerSessionMemory =
+      await buildCustomerSessionMemory(customerEmail);
 
     console.log("[LiveAvatar] Creating session token...");
-    console.log("[LiveAvatar] Session memory:", customerSessionMemory);
+    console.log("[LiveAvatar] Relationship memory:", customerSessionMemory);
 
     const tokenStart = Date.now();
 
-    const tokenResponse = await fetch("https://api.liveavatar.com/v1/sessions/token", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-API-KEY": process.env.LIVEAVATAR_API_KEY!,
-      },
-      body: JSON.stringify({
-        mode: "LITE",
-        avatar_id: process.env.LIVEAVATAR_AVATAR_ID,
-        elevenlabs_agent_config: {
-          secret_id: process.env.LIVEAVATAR_ELEVENLABS_SECRET_ID,
-          agent_id: process.env.ELEVENLABS_AGENT_ID,
-          dynamic_variables: {
-            customer_session_memory: customerSessionMemory,
-          },
+    const tokenResponse = await fetch(
+      "https://api.liveavatar.com/v1/sessions/token",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-KEY": process.env.LIVEAVATAR_API_KEY!,
         },
-      }),
-    });
+        body: JSON.stringify({
+          mode: "LITE",
+          avatar_id: process.env.LIVEAVATAR_AVATAR_ID,
+          elevenlabs_agent_config: {
+            secret_id: process.env.LIVEAVATAR_ELEVENLABS_SECRET_ID,
+            agent_id: process.env.ELEVENLABS_AGENT_ID,
+            dynamic_variables: {
+              customer_session_memory: customerSessionMemory,
+            },
+          },
+        }),
+      }
+    );
 
     const tokenMs = Date.now() - tokenStart;
 
@@ -99,12 +148,15 @@ export async function POST(req: Request) {
 
     const sessionStart = Date.now();
 
-    const startResponse = await fetch("https://api.liveavatar.com/v1/sessions/start", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${tokenData.data.session_token}`,
-      },
-    });
+    const startResponse = await fetch(
+      "https://api.liveavatar.com/v1/sessions/start",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${tokenData.data.session_token}`,
+        },
+      }
+    );
 
     const sessionMs = Date.now() - sessionStart;
 
