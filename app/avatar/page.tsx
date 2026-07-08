@@ -930,10 +930,15 @@ return (
                 </button>
 
                 <button
-  disabled
-  className="w-full sm:w-auto px-5 py-3 rounded-full font-semibold bg-zinc-800 text-zinc-500 cursor-not-allowed"
+  onClick={emailTranscript}
+  disabled={transcript.length === 0 || isEmailing}
+  className={`w-full sm:w-auto px-5 py-3 rounded-full font-semibold ${
+    transcript.length === 0 || isEmailing
+      ? "bg-zinc-800 text-zinc-500 cursor-not-allowed"
+      : "bg-white text-black"
+  }`}
 >
-  Email Coming Soon
+  {isEmailing ? "Emailing..." : "Email Transcript"}
 </button>
               </div>
             </div>
