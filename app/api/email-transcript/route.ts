@@ -106,13 +106,14 @@ export async function POST(req: Request) {
       </div>
     `;
 
-    const { data, error } = await resend.emails.send({
-      from: "Chef-it <onboarding@resend.dev>",
-      to: email,
-      subject: "Your Chef-it Session Transcript",
-      text: transcript,
-      html,
-    });
+const { data, error } = await resend.emails.send({
+  from: "Chef George <chef-it@chasingtheflames.com>",
+  to: email,
+  subject: "Your Chef-iT Session with Chef George",
+  text: transcript,
+  html,
+  replyTo: "chef-it@chasingtheflames.com",
+});
 
     if (error) {
       console.error("[Email Transcript Error]", error);
