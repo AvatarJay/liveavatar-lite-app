@@ -3,6 +3,16 @@ import { Resend } from "resend";
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "https://www.chasingtheflames.com",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
+};
+
+export async function OPTIONS() {
+  return NextResponse.json({}, { headers: corsHeaders });
+}
+
 function escapeHtml(value: string) {
   return value
     .replaceAll("&", "&amp;")
@@ -52,7 +62,7 @@ export async function POST(req: Request) {
     if (!email || !transcript) {
       return NextResponse.json(
         { error: "Missing email or transcript" },
-        { status: 400 }
+        { status: 400, headers: corsHeaders }
       );
     }
 
@@ -67,7 +77,7 @@ export async function POST(req: Request) {
                 <tr>
                   <td style="padding:30px 28px;background:#000000;text-align:center;border-bottom:1px solid #27272a;">
                     <h1 style="margin:0;color:#ffffff;font-size:30px;letter-spacing:-0.03em;">
-                      Chef-it
+                      Chef-iT
                     </h1>
                     <p style="margin:10px 0 0;color:#a1a1aa;font-size:15px;">
                       Your session transcript with Chef George
@@ -78,7 +88,7 @@ export async function POST(req: Request) {
                 <tr>
                   <td style="padding:28px;">
                     <p style="margin:0 0 18px;color:#e5e7eb;font-size:16px;line-height:1.6;">
-                      Thanks for using Chef-it. Below is a copy of your session transcript.
+                      Thanks for using Chef-iT. Below is a copy of your session transcript.
                     </p>
 
                     <div style="margin:24px 0;padding:22px;background:#09090b;border:1px solid #27272a;border-radius:18px;">
@@ -94,7 +104,7 @@ export async function POST(req: Request) {
                 <tr>
                   <td style="padding:22px 28px;background:#000000;border-top:1px solid #27272a;text-align:center;">
                     <p style="margin:0;color:#71717a;font-size:13px;line-height:1.5;">
-                      Chef-it by Chasing The Flames<br />
+                      Chef-iT by Chasing The Flames<br />
                       The On-Call Outdoor Chef is getting ready.
                     </p>
                   </td>
@@ -106,26 +116,32 @@ export async function POST(req: Request) {
       </div>
     `;
 
-const { data, error } = await resend.emails.send({
-  from: "Chef George <chef-it@chasingtheflames.com>",
-  to: email,
-  subject: "Your Chef-iT Session with Chef George",
-  text: transcript,
-  html,
-  replyTo: "chef-it@chasingtheflames.com",
-});
+    const { data, error } = await resend.emails.send({
+      from: "Chef George <chef-it@chasingtheflames.com>",
+      to: email,
+      subject: "Your Chef-iT Session with Chef George",
+      text: transcript,
+      html,
+      replyTo: "chef-it@chasingtheflames.com",
+    });
 
     if (error) {
       console.error("[Email Transcript Error]", error);
-      return NextResponse.json({ error }, { status: 500 });
+      return NextResponse.json(
+        { error },
+        { status: 500, headers: corsHeaders }
+      );
     }
 
-    return NextResponse.json({ success: true, data });
+    return NextResponse.json(
+      { success: true, data },
+      { headers: corsHeaders }
+    );
   } catch (error) {
     console.error("[Email Transcript Unexpected Error]", error);
     return NextResponse.json(
       { error: "Failed to send transcript" },
-      { status: 500 }
+      { status: 500, headers: corsHeaders }
     );
   }
 }
