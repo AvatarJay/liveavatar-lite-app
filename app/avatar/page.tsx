@@ -35,7 +35,10 @@ export default function AvatarPage() {
   const [micLevel, setMicLevel] = useState(0);
   const [micReady, setMicReady] = useState(false);
   const [micError, setMicError] = useState("");
-
+  const [showEmailModal, setShowEmailModal] = useState(false);
+  const [transcriptEmail, setTranscriptEmail] = useState("");
+  const [emailSuccess, setEmailSuccess] = useState(false);
+  const [emailError, setEmailError] = useState("");
   const trackedSessionIdRef = useRef<string | null>(null);
   const sessionStartedAtRef = useRef<number | null>(null);
   const transcriptRef = useRef<TranscriptEntry[]>([]);
@@ -508,34 +511,41 @@ const timerColor =
     URL.revokeObjectURL(url);
   }
 
-  async function emailTranscript() {
-    const email = prompt("Send transcript to which email?");
-    if (!email) return;
+async function emailTranscript() {
+  const email = transcriptEmail.trim();
+  if (!email) return;
 
-    setIsEmailing(true);
+  setIsEmailing(true);
+  setEmailError("");
+  setEmailSuccess(false);
 
-    try {
-      const res = await fetch("/api/email-transcript", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email,
-          transcript: buildTranscriptText(transcript),
-        }),
-      });
+  try {
+    const res = await fetch("/api/email-transcript", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email,
+        transcript: buildTranscriptText(transcript),
+      }),
+    });
 
-      if (!res.ok) {
-        throw new Error("Email failed");
-      }
-
-      alert("Transcript emailed successfully!");
-    } catch (error) {
-      console.error("[Email Transcript Error]", error);
-      alert("Could not send transcript.");
-    } finally {
-      setIsEmailing(false);
+    if (!res.ok) {
+      throw new Error("Email failed");
     }
+
+    setEmailSuccess(true);
+
+    setTimeout(() => {
+      setShowEmailModal(false);
+      setEmailSuccess(false);
+    }, 1800);
+  } catch (error) {
+    console.error("[Email Transcript Error]", error);
+    setEmailError("We couldn't send your transcript right now. Please try again.");
+  } finally {
+    setIsEmailing(false);
   }
+}
 
 async function loadWalletBalance(email: string) {
   try {
@@ -930,7 +940,12 @@ return (
                 </button>
 
                 <button
-  onClick={emailTranscript}
+  onClick={() => {
+    setTranscriptEmail(customerEmail || "");
+    setEmailSuccess(false);
+    setEmailError("");
+    setShowEmailModal(true);
+  }}
   disabled={transcript.length === 0 || isEmailing}
   className={`w-full sm:w-auto px-5 py-3 rounded-full font-semibold ${
     transcript.length === 0 || isEmailing
@@ -938,12 +953,63 @@ return (
       : "bg-white text-black"
   }`}
 >
-  {isEmailing ? "Emailing..." : "Email Transcript"}
+  Email Transcript
 </button>
               </div>
             </div>
           </div>
         )}
+{showEmailModal && (
+  <div className="absolute inset-0 z-[60] bg-black/80 flex items-center justify-center p-4">
+    <div className="bg-white text-black rounded-2xl p-6 w-full max-w-md shadow-2xl text-left">
+      <h2 className="text-2xl font-bold">Email Transcript</h2>
+
+      <p className="mt-3 text-zinc-600">
+        Send this Chef-iT session transcript to:
+      </p>
+
+      <input
+        type="email"
+        value={transcriptEmail}
+        onChange={(e) => setTranscriptEmail(e.target.value)}
+        className="mt-4 w-full rounded-xl border border-zinc-300 px-4 py-3 text-black"
+        placeholder="email@example.com"
+      />
+
+      {emailError && (
+        <p className="mt-3 text-sm text-red-600">{emailError}</p>
+      )}
+
+      {emailSuccess && (
+        <p className="mt-3 text-sm font-semibold text-green-700">
+          ✓ Transcript sent successfully.
+        </p>
+      )}
+
+      <div className="mt-6 flex flex-col sm:flex-row gap-3 sm:justify-end">
+        <button
+          onClick={() => setShowEmailModal(false)}
+          disabled={isEmailing}
+          className="px-5 py-3 rounded-full font-semibold bg-zinc-200 text-black"
+        >
+          Cancel
+        </button>
+
+        <button
+          onClick={emailTranscript}
+          disabled={!transcriptEmail || isEmailing}
+          className={`px-5 py-3 rounded-full font-semibold ${
+            !transcriptEmail || isEmailing
+              ? "bg-zinc-300 text-zinc-500 cursor-not-allowed"
+              : "bg-black text-white"
+          }`}
+        >
+          {isEmailing ? "Sending..." : "Send Transcript"}
+        </button>
+      </div>
+    </div>
+  </div>
+)}
       </div>
     </main>
   );
