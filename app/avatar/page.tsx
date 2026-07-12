@@ -18,6 +18,27 @@ type TranscriptEntry = {
   timestamp: string;
 };
 
+type ResponseSegment = {
+  segmentNumber: number;
+  responseText: string;
+  responseEventAt: number | null;
+  speechStartedAt: number | null;
+  speechEndedAt: number | null;
+};
+
+type TurnPerformance = {
+  turnNumber: number;
+  questionText: string;
+  questionReceivedAt: number | null;
+  segments: ResponseSegment[];
+  reported: boolean;
+};
+
+type LastUserTranscript = {
+  normalizedText: string;
+  receivedAt: number;
+};
+
 export default function AvatarPage() {
   const [showSessionComplete, setShowSessionComplete] = useState(false);
   const [customerEmail, setCustomerEmail] = useState("");
@@ -39,12 +60,26 @@ export default function AvatarPage() {
   const [transcriptEmail, setTranscriptEmail] = useState("");
   const [emailSuccess, setEmailSuccess] = useState(false);
   const [emailError, setEmailError] = useState("");
+
   const trackedSessionIdRef = useRef<string | null>(null);
   const sessionStartedAtRef = useRef<number | null>(null);
   const transcriptRef = useRef<TranscriptEntry[]>([]);
   const micStreamRef = useRef<MediaStream | null>(null);
   const animationRef = useRef<number | null>(null);
   const perfStartRef = useRef<number>(0);
+
+  const turnPerformanceRef = useRef<TurnPerformance>({
+    turnNumber: 0,
+    questionText: "",
+    questionReceivedAt: null,
+    segments: [],
+    reported: false,
+  });
+
+  const lastUserTranscriptRef = useRef<LastUserTranscript>({
+    normalizedText: "",
+    receivedAt: 0,
+  });
 
   function perfLog(label: string) {
     const elapsed = perfStartRef.current
@@ -58,17 +93,20 @@ export default function AvatarPage() {
   const seconds = timeRemaining % 60;
   const formattedTime = `${minutes}:${seconds.toString().padStart(2, "0")}`;
 
-const timerColor =
-  room && timeRemaining <= 60
-    ? "bg-red-600 text-white scale-125 animate-pulse shadow-lg"
-    : "bg-black/65 text-white";
+  const timerColor =
+    room && timeRemaining <= 60
+      ? "bg-red-600 text-white scale-125 animate-pulse shadow-lg"
+      : "bg-black/65 text-white";
 
   useEffect(() => {
     transcriptRef.current = transcript;
   }, [transcript]);
 
   function stopMicCheck() {
-    if (animationRef.current) cancelAnimationFrame(animationRef.current);
+    if (animationRef.current !== null) {
+      cancelAnimationFrame(animationRef.current);
+    }
+
     animationRef.current = null;
     micStreamRef.current?.getTracks().forEach((track) => track.stop());
     micStreamRef.current = null;
@@ -97,12 +135,17 @@ const timerColor =
 
       const animate = () => {
         analyser.getByteFrequencyData(dataArray);
+
         const average =
           dataArray.reduce((sum, value) => sum + value, 0) / dataArray.length;
+
         const level = Math.min(100, Math.round(average * 2.5));
 
         setMicLevel(level);
-        if (level > 8) setMicReady(true);
+
+        if (level > 8) {
+          setMicReady(true);
+        }
 
         animationRef.current = requestAnimationFrame(animate);
       };
@@ -111,7 +154,7 @@ const timerColor =
     } catch (error) {
       console.error("[Mic Check Error]", error);
       setMicError(
-        "We could not access your microphone. Please allow microphone access in your browser, then try again."
+        "We could not access your microphone. Please allow microphone access in your browser, then try again.",
       );
       setStatus("Microphone access needed.");
     }
@@ -131,8 +174,13 @@ const timerColor =
     setStatus("Ready");
   }
 
-  function addTranscriptEntry(speaker: TranscriptEntry["speaker"], text: string) {
-    if (!text || !text.trim()) return;
+  function addTranscriptEntry(
+    speaker: TranscriptEntry["speaker"],
+    text: string,
+  ) {
+    if (!text || !text.trim()) {
+      return;
+    }
 
     const cleanText = text.trim();
 
@@ -164,7 +212,7 @@ const timerColor =
       `Date: ${new Date().toLocaleString()}`,
       "",
       ...entries.map(
-        (entry) => `[${entry.timestamp}] ${entry.speaker}: ${entry.text}`
+        (entry) => `[${entry.timestamp}] ${entry.speaker}: ${entry.text}`,
       ),
     ].join("\n");
   }
@@ -198,15 +246,17 @@ const timerColor =
     const sessionId = trackedSessionIdRef.current;
     const startedAt = sessionStartedAtRef.current;
 
-    if (!sessionId || !startedAt) return;
+    if (!sessionId || !startedAt) {
+      return;
+    }
 
     const durationSeconds = Math.max(
       0,
-      Math.round((Date.now() - startedAt) / 1000)
+      Math.round((Date.now() - startedAt) / 1000),
     );
 
     try {
-      await fetch("/api/sessions/end", {
+      const res = await fetch("/api/sessions/end", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -215,12 +265,364 @@ const timerColor =
           transcript: buildTranscriptText(transcriptRef.current),
         }),
       });
+
+      if (!res.ok) {
+        const body = await res.text();
+        console.error("[Session Tracking End Failed]", res.status, body);
+      }
     } catch (error) {
       console.error("[Session Tracking End Error]", error);
+    } finally {
+      trackedSessionIdRef.current = null;
+      sessionStartedAtRef.current = null;
+    }
+  }
+
+  function formatPerformanceMs(value: number | null) {
+    return value === null ? "Unavailable" : `${Math.round(value)} ms`;
+  }
+
+  function formatResponseEventTiming(
+    responseEventAt: number | null,
+    speechStartedAt: number | null,
+  ) {
+    if (responseEventAt === null || speechStartedAt === null) {
+      return "Unavailable";
     }
 
-    trackedSessionIdRef.current = null;
-    sessionStartedAtRef.current = null;
+    const difference = responseEventAt - speechStartedAt;
+
+    if (Math.abs(difference) < 1) {
+      return "Same time";
+    }
+
+    if (difference > 0) {
+      return `${Math.round(difference)} ms after speech began`;
+    }
+
+    return `${Math.round(Math.abs(difference))} ms before speech began`;
+  }
+
+  function normalizeTranscriptForPerformance(value: string) {
+    return value.trim().toLowerCase().replace(/\s+/g, " ");
+  }
+
+  function shouldIgnoreDuplicateUserTranscript(value: string) {
+    const normalizedText = normalizeTranscriptForPerformance(value);
+    const now = performance.now();
+    const previous = lastUserTranscriptRef.current;
+
+    const isDuplicate =
+      normalizedText === previous.normalizedText &&
+      now - previous.receivedAt < 2500;
+
+    if (isDuplicate) {
+      return true;
+    }
+
+    lastUserTranscriptRef.current = {
+      normalizedText,
+      receivedAt: now,
+    };
+
+    return false;
+  }
+
+  function createPerformanceSegment() {
+    const performanceTurn = turnPerformanceRef.current;
+
+    const segment: ResponseSegment = {
+      segmentNumber: performanceTurn.segments.length + 1,
+      responseText: "",
+      responseEventAt: null,
+      speechStartedAt: null,
+      speechEndedAt: null,
+    };
+
+    performanceTurn.segments.push(segment);
+
+    return segment;
+  }
+
+  function beginPerformanceTurn(questionText: string) {
+    /*
+     * The arrival of a new user question means the previous turn
+     * has finished. Report it before beginning the new turn.
+     */
+    reportCompletedPerformanceTurn();
+
+    const nextTurnNumber = turnPerformanceRef.current.turnNumber + 1;
+
+    turnPerformanceRef.current = {
+      turnNumber: nextTurnNumber,
+      questionText,
+      questionReceivedAt: performance.now(),
+      segments: [],
+      reported: false,
+    };
+
+    console.log(
+      `[Performance] Turn ${nextTurnNumber}: question received`,
+      questionText,
+    );
+  }
+
+  function recordAgentResponseSegment(responseText: string) {
+    const performanceTurn = turnPerformanceRef.current;
+
+    if (performanceTurn.questionReceivedAt === null) {
+      /*
+       * This may be the session greeting, which occurs before
+       * the guest asks the first question.
+       */
+      return;
+    }
+
+    const cleanText = responseText.trim();
+
+    if (!cleanText) {
+      return;
+    }
+
+    const lastSegment =
+      performanceTurn.segments[performanceTurn.segments.length - 1];
+
+    /* Ignore an exact duplicate response event. */
+    if (lastSegment && lastSegment.responseText === cleanText) {
+      return;
+    }
+
+    /*
+     * If speak_started arrived first, attach the response text
+     * to that open segment. Otherwise create a new segment.
+     */
+    let segment = lastSegment;
+
+    if (!segment || segment.responseEventAt !== null) {
+      segment = createPerformanceSegment();
+    }
+
+    segment.responseText = cleanText;
+    segment.responseEventAt = performance.now();
+
+    const questionToResponse =
+      segment.responseEventAt - performanceTurn.questionReceivedAt;
+
+    console.log(
+      `[Performance] Turn ${performanceTurn.turnNumber}, Segment ${
+        segment.segmentNumber
+      }: agent response event at ${Math.round(questionToResponse)}ms`,
+      cleanText,
+    );
+  }
+
+  function recordSpeechStartedSegment() {
+    const performanceTurn = turnPerformanceRef.current;
+
+    if (performanceTurn.questionReceivedAt === null) {
+      /* Ignore session greeting speech before the first customer question. */
+      return;
+    }
+
+    const lastSegment =
+      performanceTurn.segments[performanceTurn.segments.length - 1];
+
+    /* Ignore a duplicate speak_started event for the open segment. */
+    if (
+      lastSegment &&
+      lastSegment.speechStartedAt !== null &&
+      lastSegment.speechEndedAt === null
+    ) {
+      console.log(
+        `[Performance] Duplicate speak_started ignored for Turn ${
+          performanceTurn.turnNumber
+        }, Segment ${lastSegment.segmentNumber}`,
+      );
+
+      return;
+    }
+
+    /*
+     * If an agent-response event created the segment first,
+     * attach speech timing to it. Otherwise create the segment.
+     */
+    let segment = lastSegment;
+
+    if (!segment || segment.speechStartedAt !== null) {
+      segment = createPerformanceSegment();
+    }
+
+    segment.speechStartedAt = performance.now();
+
+    const questionToSpeech =
+      segment.speechStartedAt - performanceTurn.questionReceivedAt;
+
+    console.log(
+      `[Performance] Turn ${performanceTurn.turnNumber}, Segment ${
+        segment.segmentNumber
+      }: speech started at ${Math.round(questionToSpeech)}ms`,
+    );
+  }
+
+  function recordSpeechEndedSegment() {
+    const performanceTurn = turnPerformanceRef.current;
+
+    if (performanceTurn.questionReceivedAt === null) {
+      return;
+    }
+
+    let openSegment: ResponseSegment | null = null;
+
+    for (
+      let index = performanceTurn.segments.length - 1;
+      index >= 0;
+      index -= 1
+    ) {
+      const candidate = performanceTurn.segments[index];
+
+      if (
+        candidate.speechStartedAt !== null &&
+        candidate.speechEndedAt === null
+      ) {
+        openSegment = candidate;
+        break;
+      }
+    }
+
+    if (!openSegment) {
+      console.log("[Performance] speak_ended received without an open segment");
+      return;
+    }
+
+    openSegment.speechEndedAt = performance.now();
+    reportPerformanceSegment(openSegment);
+  }
+
+  function reportPerformanceSegment(segment: ResponseSegment) {
+    const performanceTurn = turnPerformanceRef.current;
+    const questionReceivedAt = performanceTurn.questionReceivedAt;
+
+    if (questionReceivedAt === null) {
+      return;
+    }
+
+    const previousSegment = performanceTurn.segments[segment.segmentNumber - 2];
+
+    const previousSegmentEnd = previousSegment?.speechEndedAt ?? null;
+
+    const questionToResponse =
+      segment.responseEventAt !== null
+        ? segment.responseEventAt - questionReceivedAt
+        : null;
+
+    const questionToSpeech =
+      segment.speechStartedAt !== null
+        ? segment.speechStartedAt - questionReceivedAt
+        : null;
+
+    const speechDuration =
+      segment.speechStartedAt !== null && segment.speechEndedAt !== null
+        ? segment.speechEndedAt - segment.speechStartedAt
+        : null;
+
+    const gapFromPreviousSegment =
+      previousSegmentEnd !== null && segment.speechStartedAt !== null
+        ? segment.speechStartedAt - previousSegmentEnd
+        : null;
+
+    console.group(
+      `[Performance] Turn ${performanceTurn.turnNumber}, Segment ${segment.segmentNumber}`,
+    );
+
+    console.table({
+      "Question → response event": formatPerformanceMs(questionToResponse),
+      "Question → speech start": formatPerformanceMs(questionToSpeech),
+      "Response event timing": formatResponseEventTiming(
+        segment.responseEventAt,
+        segment.speechStartedAt,
+      ),
+      "Speech duration": formatPerformanceMs(speechDuration),
+      "Previous segment end → this segment": formatPerformanceMs(
+        gapFromPreviousSegment,
+      ),
+    });
+
+    console.log(
+      "Segment text:",
+      segment.responseText || "(response text event not received yet)",
+    );
+
+    console.groupEnd();
+  }
+
+  function reportCompletedPerformanceTurn() {
+    const performanceTurn = turnPerformanceRef.current;
+    const questionReceivedAt = performanceTurn.questionReceivedAt;
+
+    if (
+      questionReceivedAt === null ||
+      performanceTurn.reported ||
+      performanceTurn.segments.length === 0
+    ) {
+      return;
+    }
+
+    const firstSegment = performanceTurn.segments[0];
+    const secondSegment = performanceTurn.segments[1];
+
+    const questionToFirstSegment =
+      firstSegment?.speechStartedAt !== null &&
+      firstSegment?.speechStartedAt !== undefined
+        ? firstSegment.speechStartedAt - questionReceivedAt
+        : null;
+
+    const firstSegmentDuration =
+      firstSegment?.speechStartedAt !== null &&
+      firstSegment?.speechStartedAt !== undefined &&
+      firstSegment?.speechEndedAt !== null &&
+      firstSegment?.speechEndedAt !== undefined
+        ? firstSegment.speechEndedAt - firstSegment.speechStartedAt
+        : null;
+
+    const firstToSecondGap =
+      firstSegment?.speechEndedAt !== null &&
+      firstSegment?.speechEndedAt !== undefined &&
+      secondSegment?.speechStartedAt !== null &&
+      secondSegment?.speechStartedAt !== undefined
+        ? secondSegment.speechStartedAt - firstSegment.speechEndedAt
+        : null;
+
+    const questionToSecondSegment =
+      secondSegment?.speechStartedAt !== null &&
+      secondSegment?.speechStartedAt !== undefined
+        ? secondSegment.speechStartedAt - questionReceivedAt
+        : null;
+
+    console.group(`[Performance] Turn ${performanceTurn.turnNumber} summary`);
+
+    console.log("Question:", performanceTurn.questionText);
+
+    console.table({
+      "Segments observed": performanceTurn.segments.length,
+      "Question → Segment 1 speech": formatPerformanceMs(
+        questionToFirstSegment,
+      ),
+      "Segment 1 speech duration": formatPerformanceMs(firstSegmentDuration),
+      "Segment 1 end → Segment 2 speech": formatPerformanceMs(firstToSecondGap),
+      "Question → Segment 2 speech": formatPerformanceMs(
+        questionToSecondSegment,
+      ),
+    });
+
+    performanceTurn.segments.forEach((segment) => {
+      console.log(
+        `Segment ${segment.segmentNumber}:`,
+        segment.responseText || "(text unavailable)",
+      );
+    });
+
+    console.groupEnd();
+    performanceTurn.reported = true;
   }
 
   function handleLiveKitData(payload: Uint8Array) {
@@ -231,29 +633,34 @@ const timerColor =
       const data = JSON.parse(raw);
       console.log("[Transcript event parsed]", data);
 
-      const eventType =
+      const eventType = String(
         data.event_type ||
-        data.elevenlabs_event_type ||
-        data.type ||
-        data.event ||
-        data.name ||
-        data.message_type ||
-        "";
+          data.elevenlabs_event_type ||
+          data.type ||
+          data.event ||
+          data.name ||
+          data.message_type ||
+          data?.data?.event_type ||
+          data?.data?.type ||
+          "",
+      ).toLowerCase();
 
-      if (
-        eventType.includes("chunk") ||
-        eventType.includes("speak_started") ||
-        eventType.includes("speak_ended")
-      ) {
-        return;
-      }
+      const role = String(
+        data.role ||
+          data.speaker ||
+          data?.data?.role ||
+          data?.data?.speaker ||
+          "",
+      ).toLowerCase();
 
-      const text =
+      const candidateText =
         data.text ||
         data.transcript ||
         data.message ||
         data.response ||
         data.content ||
+        data?.user_transcription_event?.user_transcript ||
+        data?.agent_response_event?.agent_response ||
         data?.data?.text ||
         data?.data?.transcript ||
         data?.data?.message ||
@@ -261,30 +668,88 @@ const timerColor =
         data?.data?.agent_response_event?.agent_response ||
         "";
 
-      if (!text) return;
+      const text =
+        typeof candidateText === "string" ? candidateText.trim() : "";
 
-      if (
-        eventType.includes("user") ||
-        data.role === "user" ||
-        data?.data?.user_transcription_event
-      ) {
+      if (eventType.includes("speak_started")) {
+        recordSpeechStartedSegment();
+        return;
+      }
+
+      if (eventType.includes("speak_ended")) {
+        recordSpeechEndedSegment();
+        return;
+      }
+
+      if (eventType.includes("chunk")) {
+        return;
+      }
+
+      const hasUserTranscriptPayload = Boolean(
+        data?.user_transcription_event || data?.data?.user_transcription_event,
+      );
+
+      const hasAgentResponsePayload = Boolean(
+        data?.agent_response_event || data?.data?.agent_response_event,
+      );
+
+      const isUserTranscriptEvent =
+        eventType === "user_transcript" ||
+        eventType.includes("user_transcript") ||
+        eventType.includes("user_transcription") ||
+        (eventType.includes("user") &&
+          (eventType.includes("transcript") ||
+            eventType.includes("transcription"))) ||
+        role === "user" ||
+        hasUserTranscriptPayload;
+
+      const isAgentResponseEvent =
+        (eventType === "agent_response" ||
+          eventType.includes("agent_response") ||
+          (eventType.includes("avatar.transcription") && role !== "user") ||
+          role === "assistant" ||
+          role === "agent" ||
+          hasAgentResponsePayload) &&
+        !eventType.includes("correction") &&
+        !eventType.includes("metadata") &&
+        !eventType.includes("complete");
+
+      if (isUserTranscriptEvent) {
+        if (!text) {
+          return;
+        }
+
+        if (shouldIgnoreDuplicateUserTranscript(text)) {
+          console.log("[Performance] Duplicate user transcript ignored", {
+            eventType,
+            role,
+            text,
+          });
+
+          return;
+        }
+
+        beginPerformanceTurn(text);
         addTranscriptEntry("User", text);
         return;
       }
 
-      if (
-        eventType.includes("agent") ||
-        eventType.includes("response") ||
-        eventType.includes("avatar.transcription") ||
-        data.role === "assistant" ||
-        data?.data?.agent_response_event
-      ) {
+      if (isAgentResponseEvent) {
+        if (!text) {
+          return;
+        }
+
+        recordAgentResponseSegment(text);
         addTranscriptEntry("Chef George", text);
         return;
       }
 
-      addTranscriptEntry("System", text);
-    } catch {
+      if (text) {
+        addTranscriptEntry("System", text);
+      }
+    } catch (error) {
+      console.error("[Transcript Event Parse Error]", error, raw);
+
       if (raw.trim()) {
         addTranscriptEntry("System", raw);
       }
@@ -319,35 +784,42 @@ const timerColor =
       }
     }
 
-    loadCustomerAndWallet();
+    void loadCustomerAndWallet();
   }, []);
 
-   useEffect(() => {
-     function handleParentMessage(event: MessageEvent) {
-       if (event.data?.type !== "CHEFIT_START_SESSION") return;
-
-     console.log("[Chef-iT] Start session message received");
-
-     if (isStarting || room || showMicCheck) return;
-
-    setShowSessionComplete(false);
-    beginGatedMicCheck();
-  }
-
-  window.addEventListener("message", handleParentMessage);
-
-  return () => {
-    window.removeEventListener("message", handleParentMessage);
-  };
-}, [isStarting, room, showMicCheck, customerEmail]);
   useEffect(() => {
-    if (!room) return;
+    function handleParentMessage(event: MessageEvent) {
+      if (event.data?.type !== "CHEFIT_START_SESSION") {
+        return;
+      }
 
-    const interval = setInterval(async () => {
+      console.log("[Chef-iT] Start session message received");
+
+      if (isStarting || room || showMicCheck) {
+        return;
+      }
+
+      setShowSessionComplete(false);
+      void beginGatedMicCheck();
+    }
+
+    window.addEventListener("message", handleParentMessage);
+
+    return () => {
+      window.removeEventListener("message", handleParentMessage);
+    };
+  }, [isStarting, room, showMicCheck, customerEmail]);
+
+  useEffect(() => {
+    if (!room) {
+      return;
+    }
+
+    const interval = window.setInterval(async () => {
       const data = await spendOneSecond();
 
       if (!data) {
-        clearInterval(interval);
+        window.clearInterval(interval);
         return;
       }
 
@@ -355,28 +827,47 @@ const timerColor =
       setTimeRemaining(remaining);
 
       if (remaining <= 0) {
-        addTranscriptEntry("System", "Session ended. Minute balance reached zero.");
-        clearInterval(interval);
-        stopAvatar();
+        addTranscriptEntry(
+          "System",
+          "Session ended. Minute balance reached zero.",
+        );
+        window.clearInterval(interval);
+        await stopAvatar();
       }
     }, 1000);
 
-    return () => clearInterval(interval);
+    return () => window.clearInterval(interval);
   }, [room]);
 
   async function startAvatar() {
-    if (isStarting || room) return;
+    if (isStarting || room) {
+      return;
+    }
 
     perfLog("startAvatar called");
-
     setShowSessionComplete(false);
 
     const sponsor = sponsors[Math.floor(Math.random() * sponsors.length)];
+
     setCurrentSponsor(sponsor);
     setShowSponsor(true);
     setIsStarting(true);
     setTranscript([]);
     transcriptRef.current = [];
+
+    turnPerformanceRef.current = {
+      turnNumber: 0,
+      questionText: "",
+      questionReceivedAt: null,
+      segments: [],
+      reported: false,
+    };
+
+    lastUserTranscriptRef.current = {
+      normalizedText: "",
+      receivedAt: 0,
+    };
+
     setStatus(`This Chef-iT session is brought to you by ${sponsor.name}.`);
 
     perfLog("Starting Supabase session tracking");
@@ -399,7 +890,8 @@ const timerColor =
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ customerEmail }),
-     });
+      });
+
       const data = await res.json();
 
       perfLog("LiveAvatar session response received");
@@ -409,6 +901,7 @@ const timerColor =
         console.error(data);
         setStatus("Error creating session");
         setShowSponsor(false);
+        await endSessionTracking();
         return;
       }
 
@@ -426,7 +919,7 @@ const timerColor =
         console.log(
           `[Avatar UI] First ${track.kind} track received after ${
             Date.now() - uiStart
-          }ms`
+          }ms`,
         );
 
         perfLog(`First ${track.kind} track subscribed`);
@@ -438,7 +931,7 @@ const timerColor =
             container.innerHTML = "";
             element.setAttribute(
               "style",
-              "width:100%;height:100%;object-fit:cover;"
+              "width:100%;height:100%;object-fit:cover;",
             );
             container.appendChild(element);
           }
@@ -477,7 +970,10 @@ const timerColor =
       setShowSponsor(false);
       setStatus("Connected. Speak to Chef George.");
 
-      addTranscriptEntry("System", `Session started. Sponsor: ${sponsor.name}.`);
+      addTranscriptEntry(
+        "System",
+        `Session started. Sponsor: ${sponsor.name}.`,
+      );
     } catch (error) {
       console.error("[Avatar UI] Start error:", error);
       setStatus("Could not start avatar. Please try again.");
@@ -489,11 +985,14 @@ const timerColor =
   }
 
   async function stopAvatar() {
+    reportCompletedPerformanceTurn();
+
     room?.disconnect();
     setRoom(null);
     setShowSponsor(false);
     setStatus("Ready");
     setVideoKey((key) => key + 1);
+
     await endSessionTracking();
     await refreshWalletBeforeComplete();
   }
@@ -511,69 +1010,75 @@ const timerColor =
     URL.revokeObjectURL(url);
   }
 
-async function emailTranscript() {
-  const email = transcriptEmail.trim();
-  if (!email) return;
+  async function emailTranscript() {
+    const email = transcriptEmail.trim();
 
-  setIsEmailing(true);
-  setEmailError("");
-  setEmailSuccess(false);
-
-  try {
-    const res = await fetch("/api/email-transcript", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        email,
-        transcript: buildTranscriptText(transcript),
-      }),
-    });
-
-    if (!res.ok) {
-      throw new Error("Email failed");
+    if (!email) {
+      return;
     }
 
-    setEmailSuccess(true);
+    setIsEmailing(true);
+    setEmailError("");
+    setEmailSuccess(false);
 
-    setTimeout(() => {
-      setShowEmailModal(false);
-      setEmailSuccess(false);
-    }, 1800);
-  } catch (error) {
-    console.error("[Email Transcript Error]", error);
-    setEmailError("We couldn't send your transcript right now. Please try again.");
-  } finally {
-    setIsEmailing(false);
-  }
-}
+    try {
+      const res = await fetch("/api/email-transcript", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email,
+          transcript: buildTranscriptText(transcript),
+        }),
+      });
 
-async function loadWalletBalance(email: string) {
-  try {
-    const res = await fetch("/api/minutes/check", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ email }),
-    });
+      if (!res.ok) {
+        throw new Error("Email failed");
+      }
 
-    const data = await res.json();
+      setEmailSuccess(true);
 
-    if (res.ok && data.seconds !== undefined) {
-      setTimeRemaining(Number(data.seconds || 0));
+      window.setTimeout(() => {
+        setShowEmailModal(false);
+        setEmailSuccess(false);
+      }, 1800);
+    } catch (error) {
+      console.error("[Email Transcript Error]", error);
+      setEmailError(
+        "We couldn't send your transcript right now. Please try again.",
+      );
+    } finally {
+      setIsEmailing(false);
     }
-  } catch (error) {
-    console.error("[Wallet Balance Load Error]", error);
-  }
-}
-
-async function refreshWalletBeforeComplete() {
-  if (customerEmail) {
-    await loadWalletBalance(customerEmail);
   }
 
-  setShowSessionComplete(true);
-}
+  async function loadWalletBalance(email: string) {
+    try {
+      const res = await fetch("/api/minutes/check", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ email }),
+      });
+
+      const data = await res.json();
+
+      if (res.ok && data.seconds !== undefined) {
+        setTimeRemaining(Number(data.seconds || 0));
+      }
+    } catch (error) {
+      console.error("[Wallet Balance Load Error]", error);
+    }
+  }
+
+  async function refreshWalletBeforeComplete() {
+    if (customerEmail) {
+      await loadWalletBalance(customerEmail);
+    }
+
+    setShowSessionComplete(true);
+  }
+
   async function checkMinuteBalance() {
     try {
       const res = await fetch("/api/minutes/check", {
@@ -588,13 +1093,15 @@ async function refreshWalletBeforeComplete() {
 
       if (!res.ok) {
         console.error("[Minute Gate Error]", data);
-        alert("We could not check your Chef-iT minute balance. Please try again.");
+        alert(
+          "We could not check your Chef-iT minute balance. Please try again.",
+        );
         return false;
       }
 
       if (!data.allowed) {
         alert(
-          "You do not have any Chef-iT minutes remaining. Please purchase more minutes to continue."
+          "You do not have any Chef-iT minutes remaining. Please purchase more minutes to continue.",
         );
         return false;
       }
@@ -607,51 +1114,57 @@ async function refreshWalletBeforeComplete() {
       return true;
     } catch (error) {
       console.error("[Minute Gate Error]", error);
-      alert("We could not check your Chef-iT minute balance. Please try again.");
+      alert(
+        "We could not check your Chef-iT minute balance. Please try again.",
+      );
       return false;
     }
   }
 
   async function spendOneSecond() {
-  try {
-    const res = await fetch("/api/minutes/spend", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ email: customerEmail }),
-    });
+    try {
+      const res = await fetch("/api/minutes/spend", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ email: customerEmail }),
+      });
 
-    const data = await res.json();
+      const data = await res.json();
 
-    if (!res.ok) {
-      console.error("[Minute Spend Error]", data);
-      return false;
+      if (!res.ok) {
+        console.error("[Minute Spend Error]", data);
+        return false;
+      }
+
+      if (data.finished) {
+        return { ...data, finished: true };
+      }
+
+      return data;
+    } catch (error) {
+      console.error("[Minute Spend Error]", error);
+      return null;
     }
-
-    if (data.finished) {
-  return { ...data, finished: true };
-}
-
-    return data;
-  } catch (err) {
-    console.error("[Minute Spend Error]", err);
-    return null;
   }
-}
 
   async function beginGatedMicCheck() {
     const allowed = await checkMinuteBalance();
-    if (!allowed) return;
+
+    if (!allowed) {
+      return;
+    }
+
     await beginMicCheck();
   }
 
-const startDisabled = isStarting || !!room;
+  const startDisabled = isStarting || Boolean(room);
 
-return (
-  <main className="fixed inset-0 bg-zinc-900 text-white overflow-hidden">
-  <div className="absolute inset-0 bg-zinc-900 overflow-hidden flex items-center justify-center [&_video]:object-cover [&_video]:object-center">
-        <div className="absolute top-3 left-3 sm:top-5 sm:left-5 z-30">
+  return (
+    <main className="fixed inset-0 overflow-hidden bg-zinc-900 text-white">
+      <div className="absolute inset-0 flex items-center justify-center overflow-hidden bg-zinc-900 [&_video]:object-cover [&_video]:object-center">
+        <div className="absolute left-3 top-3 z-30 sm:left-5 sm:top-5">
           <Image
             src="/Chefit-White-New.png"
             alt="Chef-iT"
@@ -662,15 +1175,15 @@ return (
           />
         </div>
 
-        <div className="absolute top-3 right-3 sm:top-5 sm:right-5 z-30 text-right">
+        <div className="absolute right-3 top-3 z-30 text-right sm:right-5 sm:top-5">
           <div
-            className={`rounded-full px-3 py-1.5 sm:px-4 sm:py-2 text-xs sm:text-sm font-semibold transition-all duration-300 ${timerColor}`}
+            className={`rounded-full px-3 py-1.5 text-xs font-semibold transition-all duration-300 sm:px-4 sm:py-2 sm:text-sm ${timerColor}`}
           >
             {isStarting ? "Starting" : formattedTime}
           </div>
 
           {!room && !isStarting && (
-            <p className="mt-1 text-[10px] sm:text-xs text-zinc-300">
+            <p className="mt-1 text-[10px] text-zinc-300 sm:text-xs">
               Available time
             </p>
           )}
@@ -691,12 +1204,13 @@ return (
                 className="object-cover object-center opacity-80"
               />
               <div className="absolute inset-0 bg-black/30" />
-              <div className="relative z-10 px-6 max-w-sm sm:max-w-2xl mx-auto">
-                <p className="text-2xl sm:text-3xl font-bold text-white">
+              <div className="relative z-10 mx-auto max-w-sm px-6 sm:max-w-2xl">
+                <p className="text-2xl font-bold text-white sm:text-3xl">
                   Meet Chef George
                 </p>
-                <p className="mt-3 text-sm sm:text-base text-zinc-200">
-                  Ask about live-fire cooking, recipes, menu costing, and restaurant operations.
+                <p className="mt-3 text-sm text-zinc-200 sm:text-base">
+                  Ask about live-fire cooking, recipes, menu costing, and
+                  restaurant operations.
                 </p>
               </div>
             </div>
@@ -704,7 +1218,7 @@ return (
         </div>
 
         {showMicCheck && (
-          <div className="absolute inset-0 z-40 bg-black/90 flex flex-col items-center justify-center text-center px-5 sm:px-8">
+          <div className="absolute inset-0 z-40 flex flex-col items-center justify-center bg-black/90 px-5 text-center sm:px-8">
             <Image
               src="/Chefit-White-New.png"
               alt="Chef-iT"
@@ -714,20 +1228,21 @@ return (
               className="h-auto w-auto max-w-[125px] sm:max-w-[150px]"
             />
 
-            <h2 className="mt-5 sm:mt-6 text-2xl sm:text-3xl font-bold">
+            <h2 className="mt-5 text-2xl font-bold sm:mt-6 sm:text-3xl">
               Microphone Check
             </h2>
 
-            <p className="mt-3 max-w-sm sm:max-w-xl text-sm sm:text-base text-zinc-300">
-              Speak normally for a few seconds. When Chef-iT hears your microphone,
-              the meter below will move.
+            <p className="mt-3 max-w-sm text-sm text-zinc-300 sm:max-w-xl sm:text-base">
+              Speak normally for a few seconds. When Chef-iT hears your
+              microphone, the meter below will move.
             </p>
 
-<p className="mt-3 max-w-sm sm:max-w-xl text-xs sm:text-sm text-zinc-400">
-  Having trouble? Click Cancel, check your browser microphone permissions, then come back and try again.
-</p>
+            <p className="mt-3 max-w-sm text-xs text-zinc-400 sm:max-w-xl sm:text-sm">
+              Having trouble? Click Cancel, check your browser microphone
+              permissions, then come back and try again.
+            </p>
 
-            <div className="mt-7 sm:mt-8 w-full max-w-sm sm:max-w-md rounded-full bg-zinc-800 overflow-hidden h-5">
+            <div className="mt-7 h-5 w-full max-w-sm overflow-hidden rounded-full bg-zinc-800 sm:mt-8 sm:max-w-md">
               <div
                 className={`h-full transition-all ${
                   micReady ? "bg-green-500" : "bg-white"
@@ -736,29 +1251,29 @@ return (
               />
             </div>
 
-            <p className="mt-4 text-sm max-w-sm text-zinc-300">
+            <p className="mt-4 max-w-sm text-sm text-zinc-300">
               {micError
                 ? micError
                 : micReady
-                ? "✓ Microphone detected. You're ready to talk with Chef George."
-                : "Listening for your microphone..."}
+                  ? "✓ Microphone detected. You're ready to talk with Chef George."
+                  : "Listening for your microphone..."}
             </p>
 
-            <div className="mt-7 sm:mt-8 flex flex-col sm:flex-row gap-3 sm:gap-4 w-full max-w-sm sm:max-w-none sm:w-auto">
+            <div className="mt-7 flex w-full max-w-sm flex-col gap-3 sm:mt-8 sm:w-auto sm:max-w-none sm:flex-row sm:gap-4">
               <button
                 onClick={cancelMicCheck}
-                className="w-full sm:w-auto px-6 py-3 rounded-full font-semibold bg-zinc-700 text-white"
+                className="w-full rounded-full bg-zinc-700 px-6 py-3 font-semibold text-white sm:w-auto"
               >
                 Cancel
               </button>
 
               <button
                 onClick={continueAfterMicCheck}
-                disabled={!micReady || !!micError}
-                className={`w-full sm:w-auto px-6 py-3 rounded-full font-semibold ${
+                disabled={!micReady || Boolean(micError)}
+                className={`w-full rounded-full px-6 py-3 font-semibold sm:w-auto ${
                   micReady && !micError
                     ? "bg-white text-black"
-                    : "bg-zinc-700 text-zinc-400 cursor-not-allowed"
+                    : "cursor-not-allowed bg-zinc-700 text-zinc-400"
                 }`}
               >
                 Continue to Chef George
@@ -768,62 +1283,62 @@ return (
         )}
 
         {showSponsor && (
-          <div className="absolute inset-0 z-20 bg-black/90 flex flex-col items-center justify-center text-center px-5 sm:px-8">
-            <p className="text-[10px] sm:text-sm uppercase tracking-[0.18em] sm:tracking-[0.25em] text-zinc-400">
+          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/90 px-5 text-center sm:px-8">
+            <p className="text-[10px] uppercase tracking-[0.18em] text-zinc-400 sm:text-sm sm:tracking-[0.25em]">
               This Chef-iT session is brought to you by
             </p>
 
-            <div className="mt-5 sm:mt-6 rounded-2xl bg-white p-4 sm:p-6 max-w-[85%]">
+            <div className="mt-5 max-w-[85%] rounded-2xl bg-white p-4 sm:mt-6 sm:p-6">
               <Image
                 src={currentSponsor.logo}
                 alt={currentSponsor.name}
                 width={380}
                 height={160}
                 priority
-                className="max-h-28 sm:max-h-40 w-auto object-contain"
+                className="max-h-28 w-auto object-contain sm:max-h-40"
               />
             </div>
 
-            <h2 className="mt-5 sm:mt-6 text-2xl sm:text-3xl font-bold">
+            <h2 className="mt-5 text-2xl font-bold sm:mt-6 sm:text-3xl">
               {currentSponsor.name}
             </h2>
 
-            <p className="mt-5 sm:mt-6 text-base sm:text-lg text-zinc-300">
+            <p className="mt-5 text-base text-zinc-300 sm:mt-6 sm:text-lg">
               Preparing your Chef-iT session...
             </p>
 
-            <p className="mt-2 text-sm sm:text-base text-zinc-500">
+            <p className="mt-2 text-sm text-zinc-500 sm:text-base">
               The On-Call Outdoor Chef is getting ready.
             </p>
           </div>
         )}
 
         {!showSponsor && !showMicCheck && (
-          <div className="absolute bottom-4 sm:bottom-5 left-0 right-0 z-30 flex justify-center px-4">
-            <div className="flex flex-col sm:flex-row gap-3 sm:gap-4 w-full max-w-sm sm:max-w-none sm:w-auto">
+          <div className="absolute bottom-4 left-0 right-0 z-30 flex justify-center px-4 sm:bottom-5">
+            <div className="flex w-full max-w-sm flex-col gap-3 sm:w-auto sm:max-w-none sm:flex-row sm:gap-4">
               <button
                 onClick={beginGatedMicCheck}
                 disabled={startDisabled}
-                className={`w-full sm:w-auto px-6 py-3 rounded-full font-semibold ${
+                className={`w-full rounded-full px-6 py-3 font-semibold sm:w-auto ${
                   startDisabled
-                    ? "bg-zinc-500 text-zinc-300 cursor-not-allowed"
+                    ? "cursor-not-allowed bg-zinc-500 text-zinc-300"
                     : "bg-white text-black"
                 }`}
               >
                 {isStarting
                   ? "Starting..."
                   : room
-                  ? "Session Running"
-                  : "Start Session"}
+                    ? "Session Running"
+                    : "Start Session"}
               </button>
 
               <button
                 onClick={stopAvatar}
                 disabled={!room}
-                className={`w-full sm:w-auto px-6 py-3 rounded-full font-semibold ${
+                className={`w-full rounded-full px-6 py-3 font-semibold sm:w-auto ${
                   room
                     ? "bg-red-600 text-white"
-                    : "bg-zinc-800 text-zinc-500 cursor-not-allowed"
+                    : "cursor-not-allowed bg-zinc-800 text-zinc-500"
                 }`}
               >
                 End Session
@@ -831,7 +1346,7 @@ return (
 
               <button
                 onClick={() => setShowTranscript(true)}
-                className="w-full sm:w-auto px-6 py-3 rounded-full font-semibold bg-zinc-700 text-white"
+                className="w-full rounded-full bg-zinc-700 px-6 py-3 font-semibold text-white sm:w-auto"
               >
                 Transcript
               </button>
@@ -839,64 +1354,60 @@ return (
           </div>
         )}
 
-{showSessionComplete && !room && (
-  <div className="absolute inset-0 z-50 bg-black/85 flex items-center justify-center text-center px-6">
-    <div className="bg-white text-black rounded-2xl p-8 max-w-sm w-full shadow-2xl">
+        {showSessionComplete && !room && (
+          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/85 px-6 text-center">
+            <div className="w-full max-w-sm rounded-2xl bg-white p-8 text-black shadow-2xl">
+              <h2 className="text-3xl font-bold">👨‍🍳 Session Complete</h2>
 
-      <h2 className="text-3xl font-bold">👨‍🍳 Session Complete</h2>
+              <p className="mt-4 text-lg">
+                Thanks for cooking with Chef George!
+              </p>
 
-      <p className="mt-4 text-lg">
-        Thanks for cooking with Chef George!
-      </p>
+              <div className="mt-6 rounded-xl bg-zinc-100 p-4">
+                <p className="text-sm uppercase tracking-wide text-zinc-500">
+                  Remaining Time
+                </p>
+                <p className="mt-2 text-3xl font-bold">{formattedTime}</p>
+              </div>
 
-      <div className="mt-6 rounded-xl bg-zinc-100 p-4">
-        <p className="text-sm uppercase tracking-wide text-zinc-500">
-          Remaining Time
-        </p>
-        <p className="mt-2 text-3xl font-bold">
-          {formattedTime}
-        </p>
-      </div>
+              {timeRemaining > 0 ? (
+                <>
+                  <button
+                    onClick={async () => {
+                      setShowSessionComplete(false);
+                      await beginGatedMicCheck();
+                    }}
+                    className="mt-6 w-full rounded-full bg-black px-6 py-3 font-semibold text-white transition hover:bg-zinc-800"
+                  >
+                    ▶ Start Another Session
+                  </button>
 
-      {timeRemaining > 0 ? (
-        <>
-          <button
-            onClick={async () => {
-              setShowSessionComplete(false);
-              await beginGatedMicCheck();
-            }}
-            className="mt-6 w-full px-6 py-3 rounded-full font-semibold bg-black text-white hover:bg-zinc-800 transition"
-          >
-            ▶ Start Another Session
-          </button>
-
-          <a
-            href="https://www.chasingtheflames.com/pages/chef-it"
-            target="_top"
-            className="mt-3 block w-full px-6 py-3 rounded-full font-semibold bg-zinc-200 text-black hover:bg-zinc-300 transition"
-          >
-            Buy More Minutes
-          </a>
-        </>
-      ) : (
-        <a
-          href="https://www.chasingtheflames.com/pages/chef-it"
-          target="_top"
-          className="mt-6 block w-full px-6 py-3 rounded-full font-semibold bg-black text-white hover:bg-zinc-800 transition"
-        >
-          Buy More Minutes
-        </a>
-      )}
-
-    </div>
-  </div>
-)}
+                  <a
+                    href="https://www.chasingtheflames.com/pages/chef-it"
+                    target="_top"
+                    className="mt-3 block w-full rounded-full bg-zinc-200 px-6 py-3 font-semibold text-black transition hover:bg-zinc-300"
+                  >
+                    Buy More Minutes
+                  </a>
+                </>
+              ) : (
+                <a
+                  href="https://www.chasingtheflames.com/pages/chef-it"
+                  target="_top"
+                  className="mt-6 block w-full rounded-full bg-black px-6 py-3 font-semibold text-white transition hover:bg-zinc-800"
+                >
+                  Buy More Minutes
+                </a>
+              )}
+            </div>
+          </div>
+        )}
 
         {showTranscript && (
-          <div className="absolute inset-0 z-50 bg-black/80 flex items-center justify-center p-3 sm:p-6">
-            <div className="bg-zinc-950 border border-zinc-700 rounded-2xl w-full max-w-3xl h-[92%] sm:max-h-[80%] overflow-hidden flex flex-col">
-              <div className="flex items-center justify-between p-4 sm:p-5 border-b border-zinc-800">
-                <h2 className="text-lg sm:text-xl font-bold">
+          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 p-3 sm:p-6">
+            <div className="flex h-[92%] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-zinc-700 bg-zinc-950 sm:max-h-[80%]">
+              <div className="flex items-center justify-between border-b border-zinc-800 p-4 sm:p-5">
+                <h2 className="text-lg font-bold sm:text-xl">
                   Session Transcript
                 </h2>
 
@@ -908,17 +1419,17 @@ return (
                 </button>
               </div>
 
-              <div className="p-4 sm:p-5 overflow-y-auto text-left space-y-4">
+              <div className="space-y-4 overflow-y-auto p-4 text-left sm:p-5">
                 {transcript.length === 0 ? (
                   <p className="text-zinc-400">
                     No transcript has been captured yet.
                   </p>
                 ) : (
                   transcript.map((entry, index) => (
-                    <div key={index}>
+                    <div key={`${entry.timestamp}-${entry.speaker}-${index}`}>
                       <p className="text-xs text-zinc-500">{entry.timestamp}</p>
                       <p className="font-semibold">{entry.speaker}</p>
-                      <p className="text-sm sm:text-base text-zinc-300">
+                      <p className="text-sm text-zinc-300 sm:text-base">
                         {entry.text}
                       </p>
                     </div>
@@ -926,13 +1437,13 @@ return (
                 )}
               </div>
 
-              <div className="p-4 sm:p-5 border-t border-zinc-800 flex flex-col sm:flex-row justify-end gap-3">
+              <div className="flex flex-col justify-end gap-3 border-t border-zinc-800 p-4 sm:flex-row sm:p-5">
                 <button
                   onClick={downloadTranscript}
                   disabled={transcript.length === 0}
-                  className={`w-full sm:w-auto px-5 py-3 rounded-full font-semibold ${
+                  className={`w-full rounded-full px-5 py-3 font-semibold sm:w-auto ${
                     transcript.length === 0
-                      ? "bg-zinc-800 text-zinc-500 cursor-not-allowed"
+                      ? "cursor-not-allowed bg-zinc-800 text-zinc-500"
                       : "bg-white text-black"
                   }`}
                 >
@@ -940,76 +1451,77 @@ return (
                 </button>
 
                 <button
-  onClick={() => {
-    setTranscriptEmail(customerEmail || "");
-    setEmailSuccess(false);
-    setEmailError("");
-    setShowEmailModal(true);
-  }}
-  disabled={transcript.length === 0 || isEmailing}
-  className={`w-full sm:w-auto px-5 py-3 rounded-full font-semibold ${
-    transcript.length === 0 || isEmailing
-      ? "bg-zinc-800 text-zinc-500 cursor-not-allowed"
-      : "bg-white text-black"
-  }`}
->
-  Email Transcript
-</button>
+                  onClick={() => {
+                    setTranscriptEmail(customerEmail || "");
+                    setEmailSuccess(false);
+                    setEmailError("");
+                    setShowEmailModal(true);
+                  }}
+                  disabled={transcript.length === 0 || isEmailing}
+                  className={`w-full rounded-full px-5 py-3 font-semibold sm:w-auto ${
+                    transcript.length === 0 || isEmailing
+                      ? "cursor-not-allowed bg-zinc-800 text-zinc-500"
+                      : "bg-white text-black"
+                  }`}
+                >
+                  Email Transcript
+                </button>
               </div>
             </div>
           </div>
         )}
-{showEmailModal && (
-  <div className="absolute inset-0 z-[60] bg-black/80 flex items-center justify-center p-4">
-    <div className="bg-white text-black rounded-2xl p-6 w-full max-w-md shadow-2xl text-left">
-      <h2 className="text-2xl font-bold">Email Transcript</h2>
 
-      <p className="mt-3 text-zinc-600">
-        Send this Chef-iT session transcript to:
-      </p>
+        {showEmailModal && (
+          <div className="absolute inset-0 z-[60] flex items-center justify-center bg-black/80 p-4">
+            <div className="w-full max-w-md rounded-2xl bg-white p-6 text-left text-black shadow-2xl">
+              <h2 className="text-2xl font-bold">Email Transcript</h2>
 
-      <input
-        type="email"
-        value={transcriptEmail}
-        onChange={(e) => setTranscriptEmail(e.target.value)}
-        className="mt-4 w-full rounded-xl border border-zinc-300 px-4 py-3 text-black"
-        placeholder="email@example.com"
-      />
+              <p className="mt-3 text-zinc-600">
+                Send this Chef-iT session transcript to:
+              </p>
 
-      {emailError && (
-        <p className="mt-3 text-sm text-red-600">{emailError}</p>
-      )}
+              <input
+                type="email"
+                value={transcriptEmail}
+                onChange={(event) => setTranscriptEmail(event.target.value)}
+                className="mt-4 w-full rounded-xl border border-zinc-300 px-4 py-3 text-black"
+                placeholder="email@example.com"
+              />
 
-      {emailSuccess && (
-        <p className="mt-3 text-sm font-semibold text-green-700">
-          ✓ Transcript sent successfully.
-        </p>
-      )}
+              {emailError && (
+                <p className="mt-3 text-sm text-red-600">{emailError}</p>
+              )}
 
-      <div className="mt-6 flex flex-col sm:flex-row gap-3 sm:justify-end">
-        <button
-          onClick={() => setShowEmailModal(false)}
-          disabled={isEmailing}
-          className="px-5 py-3 rounded-full font-semibold bg-zinc-200 text-black"
-        >
-          Cancel
-        </button>
+              {emailSuccess && (
+                <p className="mt-3 text-sm font-semibold text-green-700">
+                  ✓ Transcript sent successfully.
+                </p>
+              )}
 
-        <button
-          onClick={emailTranscript}
-          disabled={!transcriptEmail || isEmailing}
-          className={`px-5 py-3 rounded-full font-semibold ${
-            !transcriptEmail || isEmailing
-              ? "bg-zinc-300 text-zinc-500 cursor-not-allowed"
-              : "bg-black text-white"
-          }`}
-        >
-          {isEmailing ? "Sending..." : "Send Transcript"}
-        </button>
-      </div>
-    </div>
-  </div>
-)}
+              <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-end">
+                <button
+                  onClick={() => setShowEmailModal(false)}
+                  disabled={isEmailing}
+                  className="rounded-full bg-zinc-200 px-5 py-3 font-semibold text-black"
+                >
+                  Cancel
+                </button>
+
+                <button
+                  onClick={emailTranscript}
+                  disabled={!transcriptEmail.trim() || isEmailing}
+                  className={`rounded-full px-5 py-3 font-semibold ${
+                    !transcriptEmail.trim() || isEmailing
+                      ? "cursor-not-allowed bg-zinc-300 text-zinc-500"
+                      : "bg-black text-white"
+                  }`}
+                >
+                  {isEmailing ? "Sending..." : "Send Transcript"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </main>
   );
