@@ -6,6 +6,8 @@ import { Room, RoomEvent, RemoteTrack } from "livekit-client";
 import { PERFORMANCE_CONFIG } from "@/lib/performance-config";
 
 const SESSION_SECONDS = 5 * 60;
+const GATHERING_INDICATOR_MESSAGE = "Chef George is gathering your answer...";
+const GATHERING_INDICATOR_TIMEOUT_MS = 20_000;
 
 const sponsors = [
   { name: "State Farm Agent Marty Saiz", logo: "/marty-saiz.jpg" },
@@ -94,6 +96,7 @@ export default function AvatarPage() {
   const [transcriptEmail, setTranscriptEmail] = useState("");
   const [emailSuccess, setEmailSuccess] = useState(false);
   const [emailError, setEmailError] = useState("");
+  const [showGatheringIndicator, setShowGatheringIndicator] = useState(false);
 
   const trackedSessionIdRef = useRef<string | null>(null);
   const sessionStartedAtRef = useRef<number | null>(null);
@@ -101,6 +104,7 @@ export default function AvatarPage() {
   const micStreamRef = useRef<MediaStream | null>(null);
   const animationRef = useRef<number | null>(null);
   const perfStartRef = useRef<number>(0);
+  const gatheringTimeoutRef = useRef<number | null>(null);
 
   const turnPerformanceRef = useRef<TurnPerformance>({
     eventId: "",
@@ -136,6 +140,15 @@ export default function AvatarPage() {
   useEffect(() => {
     transcriptRef.current = transcript;
   }, [transcript]);
+
+  useEffect(() => {
+    return () => {
+      if (gatheringTimeoutRef.current !== null) {
+        window.clearTimeout(gatheringTimeoutRef.current);
+        gatheringTimeoutRef.current = null;
+      }
+    };
+  }, []);
 
   function stopMicCheck() {
     if (animationRef.current !== null) {
@@ -363,6 +376,44 @@ export default function AvatarPage() {
     return false;
   }
 
+  function isGatheringAcknowledgment(value: string) {
+    const normalized = value
+      .toLowerCase()
+      .replace(/’/g, "'")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    const gatheringPatterns = [
+      /\b(?:let me|i'll|i will)\s+(?:quickly\s+|just\s+)?(?:check|look(?:\s+up)?|pull(?:\s+up)?|find|gather|get|review|search|tell\s+you\s+about)\b/,
+      /\b(?:give me|just)\s+(?:a\s+)?(?:moment|second)\b/,
+      /\bi(?:'m| am)\s+(?:checking|looking|gathering|searching|pulling)\b/,
+    ];
+
+    return gatheringPatterns.some((pattern) => pattern.test(normalized));
+  }
+
+  function hideGatheringIndicator() {
+    if (gatheringTimeoutRef.current !== null) {
+      window.clearTimeout(gatheringTimeoutRef.current);
+      gatheringTimeoutRef.current = null;
+    }
+
+    setShowGatheringIndicator(false);
+  }
+
+  function displayGatheringIndicator() {
+    if (gatheringTimeoutRef.current !== null) {
+      window.clearTimeout(gatheringTimeoutRef.current);
+    }
+
+    setShowGatheringIndicator(true);
+
+    gatheringTimeoutRef.current = window.setTimeout(() => {
+      gatheringTimeoutRef.current = null;
+      setShowGatheringIndicator(false);
+    }, GATHERING_INDICATOR_TIMEOUT_MS);
+  }
+
   function roundPerformanceMs(value: number | null) {
     if (value === null || !Number.isFinite(value)) {
       return null;
@@ -575,6 +626,7 @@ export default function AvatarPage() {
      * The arrival of a new user question means the previous turn
      * has finished. Report it before beginning the new turn.
      */
+    hideGatheringIndicator();
     reportCompletedPerformanceTurn();
 
     const nextTurnNumber = turnPerformanceRef.current.turnNumber + 1;
@@ -632,6 +684,10 @@ export default function AvatarPage() {
     segment.responseText = cleanText;
     segment.responseEventAt = performance.now();
 
+    if (segment.segmentNumber >= 2) {
+      hideGatheringIndicator();
+    }
+
     const questionToResponse =
       segment.responseEventAt - performanceTurn.questionReceivedAt;
 
@@ -681,6 +737,10 @@ export default function AvatarPage() {
 
     segment.speechStartedAt = performance.now();
 
+    if (segment.segmentNumber >= 2) {
+      hideGatheringIndicator();
+    }
+
     const questionToSpeech =
       segment.speechStartedAt - performanceTurn.questionReceivedAt;
 
@@ -723,6 +783,20 @@ export default function AvatarPage() {
 
     openSegment.speechEndedAt = performance.now();
     reportPerformanceSegment(openSegment);
+
+    const laterSegmentAlreadyStarted = performanceTurn.segments.some(
+      (segment) =>
+        segment.segmentNumber > openSegment.segmentNumber &&
+        (segment.responseEventAt !== null || segment.speechStartedAt !== null),
+    );
+
+    if (
+      openSegment.segmentNumber === 1 &&
+      !laterSegmentAlreadyStarted &&
+      isGatheringAcknowledgment(openSegment.responseText)
+    ) {
+      displayGatheringIndicator();
+    }
   }
 
   function reportPerformanceSegment(segment: ResponseSegment) {
@@ -1079,6 +1153,7 @@ export default function AvatarPage() {
     }
 
     perfLog("startAvatar called");
+    hideGatheringIndicator();
     setShowSessionComplete(false);
 
     const sponsor = sponsors[Math.floor(Math.random() * sponsors.length)];
@@ -1220,6 +1295,7 @@ export default function AvatarPage() {
   }
 
   async function stopAvatar() {
+    hideGatheringIndicator();
     reportCompletedPerformanceTurn();
 
     room?.disconnect();
@@ -1547,6 +1623,30 @@ export default function AvatarPage() {
             </p>
           </div>
         )}
+
+        {showGatheringIndicator &&
+          room &&
+          !isStarting &&
+          !showMicCheck &&
+          !showSponsor &&
+          !showSessionComplete &&
+          !showTranscript &&
+          !showEmailModal && (
+            <div
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+              className="pointer-events-none absolute bottom-52 left-1/2 z-40 w-[calc(100%_-_2rem)] -translate-x-1/2 sm:bottom-24 sm:w-auto"
+            >
+              <div className="mx-auto flex w-fit max-w-full items-center gap-2 rounded-full border border-white/20 bg-black/75 px-4 py-2.5 text-center text-sm font-semibold text-white shadow-lg backdrop-blur-md">
+                <span className="relative flex h-2.5 w-2.5 shrink-0">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-white/70 opacity-75" />
+                  <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-white" />
+                </span>
+                <span>{GATHERING_INDICATOR_MESSAGE}</span>
+              </div>
+            </div>
+          )}
 
         {!showSponsor && !showMicCheck && (
           <div className="absolute bottom-4 left-0 right-0 z-30 flex justify-center px-4 sm:bottom-5">
