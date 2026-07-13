@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import { Room, RoomEvent, RemoteTrack } from "livekit-client";
+import { PERFORMANCE_CONFIG } from "@/lib/performance-config";
 
 const SESSION_SECONDS = 5 * 60;
 
@@ -27,6 +28,7 @@ type ResponseSegment = {
 };
 
 type TurnPerformance = {
+  eventId: string;
   turnNumber: number;
   questionText: string;
   questionReceivedAt: number | null;
@@ -37,6 +39,38 @@ type TurnPerformance = {
 type LastUserTranscript = {
   normalizedText: string;
   receivedAt: number;
+};
+
+type PerformanceSegmentPayload = {
+  segmentNumber: number;
+  responseEventMs: number | null;
+  speechStartedMs: number | null;
+  speechEndedMs: number | null;
+  speechDurationMs: number | null;
+  gapFromPreviousSegmentMs: number | null;
+};
+
+type PerformanceTurnPayload = {
+  eventId: string;
+  sessionId: string | null;
+  customerEmail: string | null;
+  turnNumber: number;
+  questionCategory: string;
+  segmentCount: number;
+  firstSpeechMs: number | null;
+  firstSpeechDurationMs: number | null;
+  postAcknowledgmentGapMs: number | null;
+  substantiveAnswerStartMs: number | null;
+  secondSpeechDurationMs: number | null;
+  segmentTimings: PerformanceSegmentPayload[];
+  monitorVersion: string;
+  benchmarkVersion: string;
+  promptVersion: string;
+  knowledgeVersion: string;
+  voiceVersion: string;
+  avatarVersion: string;
+  environment: "local" | "production";
+  clientCompletedAt: string;
 };
 
 export default function AvatarPage() {
@@ -69,6 +103,7 @@ export default function AvatarPage() {
   const perfStartRef = useRef<number>(0);
 
   const turnPerformanceRef = useRef<TurnPerformance>({
+    eventId: "",
     turnNumber: 0,
     questionText: "",
     questionReceivedAt: null,
@@ -328,6 +363,197 @@ export default function AvatarPage() {
     return false;
   }
 
+  function roundPerformanceMs(value: number | null) {
+    if (value === null || !Number.isFinite(value)) {
+      return null;
+    }
+
+    return Math.max(0, Math.round(value));
+  }
+
+  function classifyPerformanceQuestion(questionText: string) {
+    const normalized = normalizeTranscriptForPerformance(questionText);
+
+    if (
+      /\b(thank|thanks|bye|goodbye|hello|hey george|how are you|how you doing|that'?s it|nope)\b/.test(
+        normalized,
+      )
+    ) {
+      return "conversation";
+    }
+
+    if (
+      /\b(triple threat|wow good|wild good|asado|fire cabinet|wind guard|hand washing station)\b/.test(
+        normalized,
+      )
+    ) {
+      return "product";
+    }
+
+    if (
+      /\b(restaurant|diner|food cost|menu cost|inventory|supplier|portion|waste|staff|profit)\b/.test(
+        normalized,
+      )
+    ) {
+      return "restaurant";
+    }
+
+    if (
+      /\b(cook|cooking|recipe|temperature|steak|beef|pork|chicken|grill|smoker|oven|fire|wood|charcoal)\b/.test(
+        normalized,
+      )
+    ) {
+      return "culinary";
+    }
+
+    return "other";
+  }
+
+  function getPerformanceEnvironment(): "local" | "production" {
+    return process.env.NODE_ENV === "development" ? "local" : "production";
+  }
+
+  function buildPerformanceSegmentTimings(
+    performanceTurn: TurnPerformance,
+  ): PerformanceSegmentPayload[] {
+    const questionReceivedAt = performanceTurn.questionReceivedAt;
+
+    if (questionReceivedAt === null) {
+      return [];
+    }
+
+    return performanceTurn.segments.map((segment, index) => {
+      const previousSegment = performanceTurn.segments[index - 1];
+      const previousSegmentEnd = previousSegment?.speechEndedAt ?? null;
+
+      return {
+        segmentNumber: segment.segmentNumber,
+        responseEventMs: roundPerformanceMs(
+          segment.responseEventAt !== null
+            ? segment.responseEventAt - questionReceivedAt
+            : null,
+        ),
+        speechStartedMs: roundPerformanceMs(
+          segment.speechStartedAt !== null
+            ? segment.speechStartedAt - questionReceivedAt
+            : null,
+        ),
+        speechEndedMs: roundPerformanceMs(
+          segment.speechEndedAt !== null
+            ? segment.speechEndedAt - questionReceivedAt
+            : null,
+        ),
+        speechDurationMs: roundPerformanceMs(
+          segment.speechStartedAt !== null && segment.speechEndedAt !== null
+            ? segment.speechEndedAt - segment.speechStartedAt
+            : null,
+        ),
+        gapFromPreviousSegmentMs: roundPerformanceMs(
+          previousSegmentEnd !== null && segment.speechStartedAt !== null
+            ? segment.speechStartedAt - previousSegmentEnd
+            : null,
+        ),
+      };
+    });
+  }
+
+  function buildPerformanceTurnPayload(
+    performanceTurn: TurnPerformance,
+  ): PerformanceTurnPayload | null {
+    const questionReceivedAt = performanceTurn.questionReceivedAt;
+
+    if (
+      !performanceTurn.eventId ||
+      questionReceivedAt === null ||
+      performanceTurn.segments.length === 0
+    ) {
+      return null;
+    }
+
+    const firstSegment = performanceTurn.segments[0];
+    const secondSegment = performanceTurn.segments[1];
+
+    return {
+      eventId: performanceTurn.eventId,
+      sessionId: trackedSessionIdRef.current,
+      customerEmail: customerEmail.trim() || null,
+      turnNumber: performanceTurn.turnNumber,
+      questionCategory: classifyPerformanceQuestion(
+        performanceTurn.questionText,
+      ),
+      segmentCount: performanceTurn.segments.length,
+      firstSpeechMs: roundPerformanceMs(
+        firstSegment?.speechStartedAt !== null &&
+          firstSegment?.speechStartedAt !== undefined
+          ? firstSegment.speechStartedAt - questionReceivedAt
+          : null,
+      ),
+      firstSpeechDurationMs: roundPerformanceMs(
+        firstSegment?.speechStartedAt !== null &&
+          firstSegment?.speechStartedAt !== undefined &&
+          firstSegment?.speechEndedAt !== null &&
+          firstSegment?.speechEndedAt !== undefined
+          ? firstSegment.speechEndedAt - firstSegment.speechStartedAt
+          : null,
+      ),
+      postAcknowledgmentGapMs: roundPerformanceMs(
+        firstSegment?.speechEndedAt !== null &&
+          firstSegment?.speechEndedAt !== undefined &&
+          secondSegment?.speechStartedAt !== null &&
+          secondSegment?.speechStartedAt !== undefined
+          ? secondSegment.speechStartedAt - firstSegment.speechEndedAt
+          : null,
+      ),
+      substantiveAnswerStartMs: roundPerformanceMs(
+        secondSegment?.speechStartedAt !== null &&
+          secondSegment?.speechStartedAt !== undefined
+          ? secondSegment.speechStartedAt - questionReceivedAt
+          : null,
+      ),
+      secondSpeechDurationMs: roundPerformanceMs(
+        secondSegment?.speechStartedAt !== null &&
+          secondSegment?.speechStartedAt !== undefined &&
+          secondSegment?.speechEndedAt !== null &&
+          secondSegment?.speechEndedAt !== undefined
+          ? secondSegment.speechEndedAt - secondSegment.speechStartedAt
+          : null,
+      ),
+      segmentTimings: buildPerformanceSegmentTimings(performanceTurn),
+      monitorVersion: PERFORMANCE_CONFIG.monitorVersion,
+      benchmarkVersion: PERFORMANCE_CONFIG.benchmarkVersion,
+      promptVersion: PERFORMANCE_CONFIG.promptVersion,
+      knowledgeVersion: PERFORMANCE_CONFIG.knowledgeVersion,
+      voiceVersion: PERFORMANCE_CONFIG.voiceVersion,
+      avatarVersion: PERFORMANCE_CONFIG.avatarVersion,
+      environment: getPerformanceEnvironment(),
+      clientCompletedAt: new Date().toISOString(),
+    };
+  }
+
+  function persistPerformanceTurn(payload: PerformanceTurnPayload) {
+    void fetch("/api/performance/turn", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      keepalive: true,
+    })
+      .then(async (res) => {
+        if (!res.ok) {
+          const body = await res.text();
+          console.error("[Performance] Persistence failed", res.status, body);
+          return;
+        }
+
+        console.log(
+          `[Performance] Turn ${payload.turnNumber} persisted`,
+          payload.eventId,
+        );
+      })
+      .catch((error) => {
+        console.error("[Performance] Persistence error", error);
+      });
+  }
+
   function createPerformanceSegment() {
     const performanceTurn = turnPerformanceRef.current;
 
@@ -354,6 +580,7 @@ export default function AvatarPage() {
     const nextTurnNumber = turnPerformanceRef.current.turnNumber + 1;
 
     turnPerformanceRef.current = {
+      eventId: crypto.randomUUID(),
       turnNumber: nextTurnNumber,
       questionText,
       questionReceivedAt: performance.now(),
@@ -622,7 +849,14 @@ export default function AvatarPage() {
     });
 
     console.groupEnd();
+
     performanceTurn.reported = true;
+
+    const payload = buildPerformanceTurnPayload(performanceTurn);
+
+    if (payload) {
+      persistPerformanceTurn(payload);
+    }
   }
 
   function handleLiveKitData(payload: Uint8Array) {
@@ -856,6 +1090,7 @@ export default function AvatarPage() {
     transcriptRef.current = [];
 
     turnPerformanceRef.current = {
+      eventId: "",
       turnNumber: 0,
       questionText: "",
       questionReceivedAt: null,
