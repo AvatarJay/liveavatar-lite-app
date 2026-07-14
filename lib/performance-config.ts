@@ -4,5 +4,5 @@ export const PERFORMANCE_CONFIG = {
   promptVersion: "elevenlabs-prompt-v1",
   knowledgeVersion: "pre-migration-knowledge-v1",
   voiceVersion: "elevenlabs-voice-v1",
-  avatarVersion: "heygen-avatar-v1",
+  avatarVersion: "heygen-avatar-v2-2026-7-14",
 } as const;
