@@ -741,7 +741,6 @@ useEffect(() => {
     }
 
     segment.speechStartedAt = performance.now();
-hideGatheringIndicator();
 
     const questionToSpeech =
       segment.speechStartedAt - performanceTurn.questionReceivedAt;
