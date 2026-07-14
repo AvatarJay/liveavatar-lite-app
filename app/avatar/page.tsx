@@ -938,6 +938,13 @@ useEffect(() => {
     const raw = new TextDecoder().decode(payload);
     console.log("[Transcript event raw]", raw);
 
+console.log(
+  "[EVENT]",
+  eventType,
+  role,
+  text
+);
+
     try {
       const data = JSON.parse(raw);
       console.log("[Transcript event parsed]", data);
