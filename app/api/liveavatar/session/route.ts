@@ -135,6 +135,8 @@ export async function POST(req: Request) {
     console.log("[LiveAvatar] First message:", firstMessage);
     console.log("[LiveAvatar] Relationship memory:", customerSessionMemory);
 
+console.log("[HeyGen] Session ID:", data.session_id);
+
     const tokenStart = Date.now();
 
     const tokenResponse = await fetch(
