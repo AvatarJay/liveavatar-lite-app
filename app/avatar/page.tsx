@@ -1219,6 +1219,64 @@ export default function AvatarPage() {
 
       const newRoom = new Room();
 
+newRoom.on(RoomEvent.ConnectionStateChanged, (state) => {
+  console.log(
+    `[LiveKit] ConnectionStateChanged`,
+    {
+      state,
+      timestamp: new Date().toISOString(),
+      sessionId: trackedSessionIdRef.current,
+      remainingSeconds: timeRemaining,
+    }
+  );
+});
+
+newRoom.on(RoomEvent.Disconnected, (reason) => {
+  console.log(
+    `[LiveKit] Disconnected`,
+    {
+      reason,
+      timestamp: new Date().toISOString(),
+      sessionId: trackedSessionIdRef.current,
+      remainingSeconds: timeRemaining,
+    }
+  );
+});
+
+newRoom.on(RoomEvent.Reconnecting, () => {
+  console.log(
+    `[LiveKit] Reconnecting`,
+    new Date().toISOString()
+  );
+});
+
+newRoom.on(RoomEvent.Reconnected, () => {
+  console.log(
+    `[LiveKit] Reconnected`,
+    new Date().toISOString()
+  );
+});
+
+newRoom.on(RoomEvent.TrackUnsubscribed, (track) => {
+  console.log(
+    `[LiveKit] TrackUnsubscribed`,
+    {
+      kind: track.kind,
+      timestamp: new Date().toISOString(),
+    }
+  );
+});
+
+newRoom.on(RoomEvent.TrackPublished, (publication) => {
+  console.log(
+    `[LiveKit] TrackPublished`,
+    {
+      kind: publication.kind,
+      timestamp: new Date().toISOString(),
+    }
+  );
+});
+
       newRoom.on(RoomEvent.DataReceived, (payload) => {
         handleLiveKitData(payload);
       });
@@ -1246,6 +1304,8 @@ export default function AvatarPage() {
             container.appendChild(element);
           }
         }
+
+
 
         if (track.kind === "audio") {
           element.setAttribute("autoplay", "true");
