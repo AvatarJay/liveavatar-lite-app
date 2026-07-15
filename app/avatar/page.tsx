@@ -298,6 +298,10 @@ export default function AvatarPage() {
       return;
     }
 
+    // Clear immediately so a new session cannot overwrite these references.
+    trackedSessionIdRef.current = null;
+    sessionStartedAtRef.current = null;
+
     const durationSeconds = Math.max(
       0,
       Math.round((Date.now() - startedAt) / 1000),
@@ -311,20 +315,17 @@ export default function AvatarPage() {
           sessionId,
           durationSeconds,
           transcript: buildTranscriptText(transcriptRef.current),
-        }),
-      });
+      }),
+    });
 
-      if (!res.ok) {
-        const body = await res.text();
-        console.error("[Session Tracking End Failed]", res.status, body);
-      }
-    } catch (error) {
-      console.error("[Session Tracking End Error]", error);
-    } finally {
-      trackedSessionIdRef.current = null;
-      sessionStartedAtRef.current = null;
+    if (!res.ok) {
+      const body = await res.text();
+      console.error("[Session Tracking End Failed]", res.status, body);
     }
+  } catch (error) {
+    console.error("[Session Tracking End Error]", error);
   }
+}
 
   function formatPerformanceMs(value: number | null) {
     return value === null ? "Unavailable" : `${Math.round(value)} ms`;
@@ -1140,7 +1141,7 @@ export default function AvatarPage() {
           "Session ended. Minute balance reached zero.",
         );
         window.clearInterval(interval);
-        await stopAvatar();
+        stopAvatar();
       }
     }, 1000);
 
@@ -1294,32 +1295,49 @@ export default function AvatarPage() {
     }
   }
 
-  async function stopAvatar() {
+  function stopAvatar() {
     hideGatheringIndicator();
     reportCompletedPerformanceTurn();
 
+    // End the visible session immediately.
     room?.disconnect();
     setRoom(null);
     setShowSponsor(false);
     setStatus("Ready");
     setVideoKey((key) => key + 1);
 
-    await endSessionTracking();
-    await refreshWalletBeforeComplete();
+    // Display the completion popup immediately.
+    setShowSessionComplete(true);
+
+    // Finish server work in the background.
+    console.time("[Session End] Background Work");
+
+    void endSessionTracking()
+      .then(async () => {
+        if (customerEmail) {
+          await loadWalletBalance(customerEmail);
+        }
+      })
+      .catch((error) => {
+        console.error("[Session End Background Error]", error);
+      })
+      .finally(() => {
+        console.timeEnd("[Session End] Background Work");
+      });
   }
 
-  function downloadTranscript() {
-    const transcriptText = buildTranscriptText(transcript);
-    const blob = new Blob([transcriptText], { type: "text/plain" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
+function downloadTranscript() {
+  const transcriptText = buildTranscriptText(transcript);
+  const blob = new Blob([transcriptText], { type: "text/plain" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
 
-    link.href = url;
-    link.download = "chefit-transcript.txt";
-    link.click();
+  link.href = url;
+  link.download = "chefit-transcript.txt";
+  link.click();
 
-    URL.revokeObjectURL(url);
-  }
+  URL.revokeObjectURL(url);
+}
 
   async function emailTranscript() {
     const email = transcriptEmail.trim();
@@ -1382,13 +1400,6 @@ export default function AvatarPage() {
     }
   }
 
-  async function refreshWalletBeforeComplete() {
-    if (customerEmail) {
-      await loadWalletBalance(customerEmail);
-    }
-
-    setShowSessionComplete(true);
-  }
 
   async function checkMinuteBalance() {
     try {
