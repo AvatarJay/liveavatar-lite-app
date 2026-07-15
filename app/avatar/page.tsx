@@ -6,13 +6,8 @@ import { Room, RoomEvent, RemoteTrack } from "livekit-client";
 import { PERFORMANCE_CONFIG } from "@/lib/performance-config";
 
 const SESSION_SECONDS = 5 * 60;
-const GATHERING_MESSAGES = [
-  "👨‍🍳 Chef George is gathering the best answer for you...",
-  "🔥 Checking live-fire techniques...",
-  "📚 Searching recipes and culinary knowledge...",
-  "🥩 Reviewing temperatures and cooking methods...",
-  "🍳 Looking through Chef George's notes...",
-];
+const GATHERING_INDICATOR_MESSAGE = "Chef George is gathering your answer...";
+const GATHERING_INDICATOR_TIMEOUT_MS = 20_000;
 
 const sponsors = [
   { name: "State Farm Agent Marty Saiz", logo: "/marty-saiz.jpg" },
@@ -102,7 +97,6 @@ export default function AvatarPage() {
   const [emailSuccess, setEmailSuccess] = useState(false);
   const [emailError, setEmailError] = useState("");
   const [showGatheringIndicator, setShowGatheringIndicator] = useState(false);
-  const [gatheringMessageIndex, setGatheringMessageIndex] = useState(0);
 
   const trackedSessionIdRef = useRef<string | null>(null);
   const sessionStartedAtRef = useRef<number | null>(null);
@@ -155,18 +149,6 @@ export default function AvatarPage() {
       }
     };
   }, []);
-
-useEffect(() => {
-  if (!showGatheringIndicator) return;
-
-  const id = window.setInterval(() => {
-    setGatheringMessageIndex((current) =>
-      (current + 1) % GATHERING_MESSAGES.length
-    );
-  }, 3200);
-
-  return () => clearInterval(id);
-}, [showGatheringIndicator]);
 
   function stopMicCheck() {
     if (animationRef.current !== null) {
@@ -411,13 +393,26 @@ useEffect(() => {
   }
 
   function hideGatheringIndicator() {
-  setShowGatheringIndicator(false);
-}
+    if (gatheringTimeoutRef.current !== null) {
+      window.clearTimeout(gatheringTimeoutRef.current);
+      gatheringTimeoutRef.current = null;
+    }
+
+    setShowGatheringIndicator(false);
+  }
 
   function displayGatheringIndicator() {
-  setGatheringMessageIndex(0);
-  setShowGatheringIndicator(true);
-}
+    if (gatheringTimeoutRef.current !== null) {
+      window.clearTimeout(gatheringTimeoutRef.current);
+    }
+
+    setShowGatheringIndicator(true);
+
+    gatheringTimeoutRef.current = window.setTimeout(() => {
+      gatheringTimeoutRef.current = null;
+      setShowGatheringIndicator(false);
+    }, GATHERING_INDICATOR_TIMEOUT_MS);
+  }
 
   function roundPerformanceMs(value: number | null) {
     if (value === null || !Number.isFinite(value)) {
@@ -631,7 +626,7 @@ useEffect(() => {
      * The arrival of a new user question means the previous turn
      * has finished. Report it before beginning the new turn.
      */
-    displayGatheringIndicator();
+    hideGatheringIndicator();
     reportCompletedPerformanceTurn();
 
     const nextTurnNumber = turnPerformanceRef.current.turnNumber + 1;
@@ -742,6 +737,10 @@ useEffect(() => {
 
     segment.speechStartedAt = performance.now();
 
+    if (segment.segmentNumber >= 2) {
+      hideGatheringIndicator();
+    }
+
     const questionToSpeech =
       segment.speechStartedAt - performanceTurn.questionReceivedAt;
 
@@ -791,13 +790,13 @@ useEffect(() => {
         (segment.responseEventAt !== null || segment.speechStartedAt !== null),
     );
 
-   if (
-    openSegment.segmentNumber === 1 &&
-    !laterSegmentAlreadyStarted &&
-    isGatheringAcknowledgment(openSegment.responseText)
-) {
-    displayGatheringIndicator();
-}
+    if (
+      openSegment.segmentNumber === 1 &&
+      !laterSegmentAlreadyStarted &&
+      isGatheringAcknowledgment(openSegment.responseText)
+    ) {
+      displayGatheringIndicator();
+    }
   }
 
   function reportPerformanceSegment(segment: ResponseSegment) {
@@ -1220,64 +1219,6 @@ useEffect(() => {
 
       const newRoom = new Room();
 
-newRoom.on(RoomEvent.ConnectionStateChanged, (state) => {
-  console.log(
-    `[LiveKit] ConnectionStateChanged`,
-    {
-      state,
-      timestamp: new Date().toISOString(),
-      sessionId: trackedSessionIdRef.current,
-      remainingSeconds: timeRemaining,
-    }
-  );
-});
-
-newRoom.on(RoomEvent.Disconnected, (reason) => {
-  console.log(
-    `[LiveKit] Disconnected`,
-    {
-      reason,
-      timestamp: new Date().toISOString(),
-      sessionId: trackedSessionIdRef.current,
-      remainingSeconds: timeRemaining,
-    }
-  );
-});
-
-newRoom.on(RoomEvent.Reconnecting, () => {
-  console.log(
-    `[LiveKit] Reconnecting`,
-    new Date().toISOString()
-  );
-});
-
-newRoom.on(RoomEvent.Reconnected, () => {
-  console.log(
-    `[LiveKit] Reconnected`,
-    new Date().toISOString()
-  );
-});
-
-newRoom.on(RoomEvent.TrackUnsubscribed, (track) => {
-  console.log(
-    `[LiveKit] TrackUnsubscribed`,
-    {
-      kind: track.kind,
-      timestamp: new Date().toISOString(),
-    }
-  );
-});
-
-newRoom.on(RoomEvent.TrackPublished, (publication) => {
-  console.log(
-    `[LiveKit] TrackPublished`,
-    {
-      kind: publication.kind,
-      timestamp: new Date().toISOString(),
-    }
-  );
-});
-
       newRoom.on(RoomEvent.DataReceived, (payload) => {
         handleLiveKitData(payload);
       });
@@ -1305,8 +1246,6 @@ newRoom.on(RoomEvent.TrackPublished, (publication) => {
             container.appendChild(element);
           }
         }
-
-
 
         if (track.kind === "audio") {
           element.setAttribute("autoplay", "true");
@@ -1700,28 +1639,11 @@ newRoom.on(RoomEvent.TrackPublished, (publication) => {
               className="pointer-events-none absolute bottom-52 left-1/2 z-40 w-[calc(100%_-_2rem)] -translate-x-1/2 sm:bottom-24 sm:w-auto"
             >
               <div className="mx-auto flex w-fit max-w-full items-center gap-2 rounded-full border border-white/20 bg-black/75 px-4 py-2.5 text-center text-sm font-semibold text-white shadow-lg backdrop-blur-md">
-                <div className="flex gap-1">
-  <span className="h-2 w-2 rounded-full bg-orange-400 animate-bounce" />
-  <span
-    className="h-2 w-2 rounded-full bg-orange-400 animate-bounce"
-    style={{ animationDelay: "0.15s" }}
-  />
-  <span
-    className="h-2 w-2 rounded-full bg-orange-400 animate-bounce"
-    style={{ animationDelay: "0.30s" }}
-  />
-</div>
-                 
-<div className="flex flex-col text-left">
-  <span className="font-semibold">
-    {GATHERING_MESSAGES[gatheringMessageIndex]}
-  </span>
-
-  <span className="mt-1 text-xs text-zinc-300">
-    Searching recipes • techniques • restaurant knowledge
-  </span>
-</div>
-
+                <span className="relative flex h-2.5 w-2.5 shrink-0">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-white/70 opacity-75" />
+                  <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-white" />
+                </span>
+                <span>{GATHERING_INDICATOR_MESSAGE}</span>
               </div>
             </div>
           )}
