@@ -217,9 +217,15 @@ export default function AvatarPage() {
 
   function cancelMicCheck() {
     stopMicCheck();
+    hideGatheringIndicator();
+
     setShowMicCheck(false);
     setMicReady(false);
+    setMicError("");
     setStatus("Ready");
+
+    // Return to the pre-session ready state.
+    setShowSessionComplete(false);
   }
 
   function addTranscriptEntry(
