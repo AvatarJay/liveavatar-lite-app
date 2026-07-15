@@ -42,7 +42,7 @@ export async function POST(req: Request) {
 
     const openai = new OpenAI({
       apiKey,
-      timeout: 5000,
+      timeout: 7500,
       maxRetries: 0,
     });
 
