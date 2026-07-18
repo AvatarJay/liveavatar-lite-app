@@ -46,6 +46,40 @@ type ProspectRow = {
   marketing_status: string | null;
 };
 
+type ExistingCustomerMatch = {
+  found: boolean;
+  reason:
+    | "existing_customer"
+    | "minutes_purchased"
+    | "first_session_started"
+    | null;
+  customerId: string | null;
+  matchedAt: string | null;
+  matchedSource:
+    | "customers"
+    | "purchases"
+    | "sessions"
+    | null;
+};
+
+type CustomerRow = {
+  id: string;
+  email: string | null;
+  created_at: string | null;
+};
+
+type PurchaseRow = {
+  id: string;
+  customer_email: string | null;
+  created_at: string | null;
+};
+
+type SessionRow = {
+  id: string;
+  customer_email: string | null;
+  started_at: string | null;
+};
+
 type CampaignDecision = {
   campaignId: string;
   campaignName: string;
@@ -56,6 +90,7 @@ type CampaignDecision = {
   decisionReason: string;
   wouldRelease: boolean;
   atomicClaimed: boolean;
+  stopped: boolean;
 };
 
 type CampaignSummary = {
@@ -75,6 +110,7 @@ type CampaignSummary = {
   evaluatedCount: number;
   wouldReleaseCount: number;
   atomicClaims: number;
+  stoppedCount: number;
   decisions: CampaignDecision[];
 };
 
@@ -342,6 +378,118 @@ async function isSuppressed(
   return Boolean(data);
 }
 
+async function findExistingCustomer(
+  normalizedEmail: string
+): Promise<ExistingCustomerMatch> {
+  /*
+   * Precedence:
+   * 1. Canonical customer identity
+   * 2. Purchase history
+   * 3. Session history
+   */
+
+  const { data: customerRows, error: customerError } =
+    await supabase
+      .from("customers")
+      .select("id, email, created_at")
+      .ilike("email", normalizedEmail)
+      .limit(10);
+
+  if (customerError) {
+    throw new Error(
+      `Unable to check customers: ${customerError.message}`
+    );
+  }
+
+  const customer = (
+    (customerRows ?? []) as CustomerRow[]
+  ).find(
+    (row) => normalizeEmail(row.email) === normalizedEmail
+  );
+
+  if (customer) {
+    return {
+      found: true,
+      reason: "existing_customer",
+      customerId: customer.id,
+      matchedAt: customer.created_at,
+      matchedSource: "customers",
+    };
+  }
+
+  const { data: purchaseRows, error: purchaseError } =
+    await supabase
+      .from("purchases")
+      .select("id, customer_email, created_at")
+      .ilike("customer_email", normalizedEmail)
+      .order("created_at", { ascending: false })
+      .limit(10);
+
+  if (purchaseError) {
+    throw new Error(
+      `Unable to check purchases: ${purchaseError.message}`
+    );
+  }
+
+  const purchase = (
+    (purchaseRows ?? []) as PurchaseRow[]
+  ).find(
+    (row) =>
+      normalizeEmail(row.customer_email) ===
+      normalizedEmail
+  );
+
+  if (purchase) {
+    return {
+      found: true,
+      reason: "minutes_purchased",
+      customerId: null,
+      matchedAt: purchase.created_at,
+      matchedSource: "purchases",
+    };
+  }
+
+  const { data: sessionRows, error: sessionError } =
+    await supabase
+      .from("sessions")
+      .select("id, customer_email, started_at")
+      .ilike("customer_email", normalizedEmail)
+      .order("started_at", { ascending: false })
+      .limit(10);
+
+  if (sessionError) {
+    throw new Error(
+      `Unable to check sessions: ${sessionError.message}`
+    );
+  }
+
+  const session = (
+    (sessionRows ?? []) as SessionRow[]
+  ).find(
+    (row) =>
+      normalizeEmail(row.customer_email) ===
+      normalizedEmail
+  );
+
+  if (session) {
+    return {
+      found: true,
+      reason: "first_session_started",
+      customerId: null,
+      matchedAt: session.started_at,
+      matchedSource: "sessions",
+    };
+  }
+
+  return {
+    found: false,
+    reason: null,
+    customerId: null,
+    matchedAt: null,
+    matchedSource: null,
+  };
+}
+
 async function claimCampaignProspect({
   campaignId,
   campaignProspectId,
@@ -418,6 +566,107 @@ async function returnDryRunClaimToQueue({
   return Boolean(data);
 }
 
+async function stopClaimedProspect({
+  campaignId,
+  campaignProspectId,
+  claimToken,
+  stopReason,
+  stoppedAt,
+}: {
+  campaignId: string;
+  campaignProspectId: string;
+  claimToken: string;
+  stopReason: string;
+  stoppedAt: string;
+}): Promise<boolean> {
+  const { data, error } = await supabase
+    .from("campaign_prospects")
+    .update({
+      outreach_status: "stopped",
+      stop_reason: stopReason,
+      decision_reason:
+        `Acquisition stopped: ${stopReason}.`,
+      automation_stopped_at: stoppedAt,
+      release_claim_token: null,
+      release_claimed_at: null,
+      next_attempt_at: null,
+      release_error_code: null,
+      release_error_message: null,
+    })
+    .eq("id", campaignProspectId)
+    .eq("campaign_id", campaignId)
+    .eq("outreach_status", "releasing")
+    .eq("release_claim_token", claimToken)
+    .select("id")
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(
+      `Unable to stop claimed prospect: ${error.message}`
+    );
+  }
+
+  return Boolean(data);
+}
+
+async function upsertCreatorRelationship({
+  prospectId,
+  customerId,
+  campaignId,
+  campaignProspectId,
+  relationshipReason,
+  matchedAt,
+}: {
+  prospectId: string;
+  customerId: string | null;
+  campaignId: string;
+  campaignProspectId: string;
+  relationshipReason: string;
+  matchedAt: string | null;
+}) {
+  const activityAt = matchedAt || new Date().toISOString();
+
+  const { data, error } = await supabase
+    .from("creator_relationships")
+    .upsert(
+      {
+        prospect_id: prospectId,
+        customer_id: customerId,
+        relationship_type: "creator",
+        relationship_stage: "follow_up",
+        follow_up_status: "not_started",
+        source_campaign_id: campaignId,
+        source_campaign_prospect_id:
+          campaignProspectId,
+        relationship_reason: relationshipReason,
+        became_customer_at: matchedAt,
+        last_activity_at: activityAt,
+      },
+      {
+        onConflict: "prospect_id,relationship_type",
+      }
+    )
+    .select(
+      `
+        id,
+        prospect_id,
+        customer_id,
+        relationship_type,
+        relationship_stage,
+        follow_up_status
+      `
+    )
+    .single();
+
+  if (error) {
+    throw new Error(
+      `Unable to upsert creator relationship: ${error.message}`
+    );
+  }
+
+  return data;
+}
+
 async function writeClaimEvent({
   engineRunId,
   campaignId,
@@ -458,6 +707,56 @@ async function writeClaimEvent({
         claim_token: claimToken,
         decision_reason: decisionReason,
         occurred_at: new Date().toISOString(),
+      },
+    });
+
+  if (error) {
+    throw new Error(
+      `Unable to write ${eventType}: ${error.message}`
+    );
+  }
+}
+
+async function writeCustomerTransitionEvent({
+  engineRunId,
+  campaignId,
+  campaignProspectId,
+  prospectId,
+  eventType,
+  decisionCode,
+  decisionReason,
+  eventData,
+}: {
+  engineRunId: string;
+  campaignId: string;
+  campaignProspectId: string;
+  prospectId: string;
+  eventType:
+    | "campaign.prospect_existing_customer_detected"
+    | "campaign.prospect_stopped"
+    | "creator.relationship_upserted";
+  decisionCode: string;
+  decisionReason: string;
+  eventData: Record<string, unknown>;
+}) {
+  const { error } = await supabase
+    .from("campaign_events")
+    .insert({
+      campaign_id: campaignId,
+      campaign_prospect_id: campaignProspectId,
+      prospect_id: prospectId,
+      source_system: "growth_engine",
+      event_type: eventType,
+      decision_code: decisionCode,
+      decision_source: "release_engine",
+      engine_run_id: engineRunId,
+      event_data: {
+        dry_run_delivery: true,
+        engine_name: ENGINE_NAME,
+        engine_version: ENGINE_VERSION,
+        decision_reason: decisionReason,
+        occurred_at: new Date().toISOString(),
+        ...eventData,
       },
     });
 
@@ -586,6 +885,7 @@ async function evaluateCampaign({
       evaluatedCount: 0,
       wouldReleaseCount: 0,
       atomicClaims: 0,
+      stoppedCount: 0,
       decisions,
     };
   }
@@ -628,9 +928,9 @@ async function evaluateCampaign({
   );
 
   /*
-   * A dry run searches the queue until it finds the first
-   * prospect that would be releasable. It records why earlier
-   * records would be skipped but changes no campaign status.
+   * The engine evaluates queued prospects until it finds one
+   * releasable candidate. Existing customers may be permanently
+   * stopped, but no email is delivered during Commit 3.
    */
   for (const membership of memberships) {
   const prospect = prospectById.get(
@@ -641,6 +941,7 @@ async function evaluateCampaign({
   let decisionReason = "";
   let wouldRelease = false;
   let atomicClaimed = false;
+  let stopped = false;
   let email = "";
 
   if (!prospect) {
@@ -675,11 +976,6 @@ async function evaluateCampaign({
       decisionReason =
         "The normalized email exists in marketing_suppressions.";
     } else {
-      /*
-       * The prospect passed evaluation. Now attempt exclusive
-       * ownership before declaring that this engine could
-       * release it.
-       */
       const claimToken = randomUUID();
       const claimedAt = new Date().toISOString();
 
@@ -706,52 +1002,157 @@ async function evaluateCampaign({
           claimToken,
         });
       } else {
-        decisionCode = "atomic_claim_success";
-        decisionReason =
-          "The prospect was claimed exclusively and would be released.";
-
-        wouldRelease = true;
-
         await writeClaimEvent({
           engineRunId,
           campaignId: campaign.id,
           campaignProspectId: membership.id,
           prospectId: membership.prospect_id,
           eventType: "campaign.prospect_claimed",
-          decisionCode,
-          decisionReason,
+          decisionCode: "atomic_claim_success",
+          decisionReason:
+            "The prospect was claimed exclusively.",
           claimToken,
         });
 
-        /*
-         * Commit 2 remains non-delivery. Return the record to
-         * the queue only if this invocation still owns it.
-         */
-        const returnedToQueue =
-          await returnDryRunClaimToQueue({
+        const customerMatch =
+          await findExistingCustomer(email);
+
+        if (
+          customerMatch.found &&
+          customerMatch.reason
+        ) {
+          decisionCode = customerMatch.reason;
+          decisionReason =
+            `Acquisition stopped because the email matched ` +
+            `${customerMatch.matchedSource}.`;
+
+          await writeCustomerTransitionEvent({
+            engineRunId,
             campaignId: campaign.id,
             campaignProspectId: membership.id,
-            claimToken,
+            prospectId: membership.prospect_id,
+            eventType:
+              "campaign.prospect_existing_customer_detected",
+            decisionCode,
+            decisionReason,
+            eventData: {
+              email,
+              matched_source:
+                customerMatch.matchedSource,
+              matched_at: customerMatch.matchedAt,
+              customer_id:
+                customerMatch.customerId,
+            },
           });
 
-        if (!returnedToQueue) {
-          throw new Error(
-            "The dry-run claim could not be safely returned to the queue."
-          );
-        }
+          const relationship =
+            await upsertCreatorRelationship({
+              prospectId: membership.prospect_id,
+              customerId: customerMatch.customerId,
+              campaignId: campaign.id,
+              campaignProspectId: membership.id,
+              relationshipReason:
+                customerMatch.reason,
+              matchedAt: customerMatch.matchedAt,
+            });
 
-        await writeClaimEvent({
-          engineRunId,
-          campaignId: campaign.id,
-          campaignProspectId: membership.id,
-          prospectId: membership.prospect_id,
-          eventType:
-            "campaign.prospect_claim_released",
-          decisionCode: "dry_run_claim_released",
-          decisionReason:
-            "The dry-run claim was safely returned to the queue.",
-          claimToken,
-        });
+          await writeCustomerTransitionEvent({
+            engineRunId,
+            campaignId: campaign.id,
+            campaignProspectId: membership.id,
+            prospectId: membership.prospect_id,
+            eventType:
+              "creator.relationship_upserted",
+            decisionCode:
+              "creator_relationship_follow_up",
+            decisionReason:
+              "The creator was placed into the general follow-up relationship stage.",
+            eventData: {
+              creator_relationship_id:
+                relationship.id,
+              relationship_type:
+                relationship.relationship_type,
+              relationship_stage:
+                relationship.relationship_stage,
+              follow_up_status:
+                relationship.follow_up_status,
+              customer_id:
+                relationship.customer_id,
+            },
+          });
+
+          const stoppedAt =
+            new Date().toISOString();
+
+          const stopSucceeded =
+            await stopClaimedProspect({
+              campaignId: campaign.id,
+              campaignProspectId: membership.id,
+              claimToken,
+              stopReason: customerMatch.reason,
+              stoppedAt,
+            });
+
+          if (!stopSucceeded) {
+            throw new Error(
+              "The claimed existing customer could not be safely stopped."
+            );
+          }
+
+          stopped = true;
+
+          await writeCustomerTransitionEvent({
+            engineRunId,
+            campaignId: campaign.id,
+            campaignProspectId: membership.id,
+            prospectId: membership.prospect_id,
+            eventType: "campaign.prospect_stopped",
+            decisionCode:
+              customerMatch.reason,
+            decisionReason,
+            eventData: {
+              email,
+              stop_reason:
+                customerMatch.reason,
+              stopped_at: stoppedAt,
+              creator_relationship_id:
+                relationship.id,
+            },
+          });
+        } else {
+          decisionCode = "atomic_claim_success";
+          decisionReason =
+            "The prospect was claimed exclusively and would be released.";
+
+          wouldRelease = true;
+
+          const returnedToQueue =
+            await returnDryRunClaimToQueue({
+              campaignId: campaign.id,
+              campaignProspectId: membership.id,
+              claimToken,
+            });
+
+          if (!returnedToQueue) {
+            throw new Error(
+              "The dry-run claim could not be safely returned to the queue."
+            );
+          }
+
+          await writeClaimEvent({
+            engineRunId,
+            campaignId: campaign.id,
+            campaignProspectId: membership.id,
+            prospectId: membership.prospect_id,
+            eventType:
+              "campaign.prospect_claim_released",
+            decisionCode:
+              "dry_run_claim_released",
+            decisionReason:
+              "The releasable dry-run claim was safely returned to the queue.",
+            claimToken,
+          });
+        }
       }
     }
   }
@@ -766,6 +1167,7 @@ async function evaluateCampaign({
     decisionReason,
     wouldRelease,
     atomicClaimed,
+    stopped,
   };
 
   decisions.push(decision);
@@ -789,14 +1191,15 @@ async function evaluateCampaign({
         membership.next_attempt_at,
       would_release: wouldRelease,
       atomic_claimed: atomicClaimed,
+      stopped,
     },
   });
 
-    /*
-   * Stop once this run successfully claims its one candidate.
-   * A failed claim may continue to the next queued row.
+  /*
+   * Existing customers are stopped, then evaluation continues
+   * until one genuinely releasable prospect is identified.
    */
-  if (atomicClaimed) {
+  if (wouldRelease) {
     break;
   }
 }
@@ -821,6 +1224,9 @@ return {
   ).length,
   atomicClaims: decisions.filter(
     (decision) => decision.atomicClaimed
+  ).length,
+  stoppedCount: decisions.filter(
+    (decision) => decision.stopped
   ).length,
   decisions,
 };
@@ -919,6 +1325,13 @@ async function runDryReleaseEngine() {
         0
       );
 
+    const prospectsStopped =
+      campaignSummaries.reduce(
+        (total, campaign) =>
+          total + campaign.stoppedCount,
+        0
+      );
+
     const completedAt = new Date();
 
     const resultSummary = {
@@ -934,6 +1347,7 @@ async function runDryReleaseEngine() {
       prospects_would_release:
         prospectsWouldRelease,
       atomic_claims: atomicClaims,
+      prospects_stopped: prospectsStopped,
       prospects_released: 0,
       campaigns: campaignSummaries,
     };
@@ -946,7 +1360,7 @@ async function runDryReleaseEngine() {
         campaigns_checked: campaigns.length,
         prospects_evaluated: prospectsEvaluated,
         atomic_claims: atomicClaims,
-        prospects_stopped: 0,
+        prospects_stopped: prospectsStopped,
         prospects_released: 0,
         prospects_failed: 0,
         result_summary: resultSummary,
