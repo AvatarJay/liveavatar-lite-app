@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 
 import { supabase } from "@/lib/supabase";
@@ -54,6 +55,7 @@ type CampaignDecision = {
   decisionCode: string;
   decisionReason: string;
   wouldRelease: boolean;
+  atomicClaimed: boolean;
 };
 
 type CampaignSummary = {
@@ -72,6 +74,7 @@ type CampaignSummary = {
   queuedCount: number;
   evaluatedCount: number;
   wouldReleaseCount: number;
+  atomicClaims: number;
   decisions: CampaignDecision[];
 };
 
@@ -339,6 +342,132 @@ async function isSuppressed(
   return Boolean(data);
 }
 
+async function claimCampaignProspect({
+  campaignId,
+  campaignProspectId,
+  claimToken,
+  claimedAt,
+}: {
+  campaignId: string;
+  campaignProspectId: string;
+  claimToken: string;
+  claimedAt: string;
+}): Promise<boolean> {
+  /*
+   * This update is atomic because it succeeds only while the
+   * row is still queued. If another engine claimed it first,
+   * Supabase returns no matching row.
+   */
+  const { data, error } = await supabase
+    .from("campaign_prospects")
+    .update({
+      outreach_status: "releasing",
+      release_claim_token: claimToken,
+      release_claimed_at: claimedAt,
+    })
+    .eq("id", campaignProspectId)
+    .eq("campaign_id", campaignId)
+    .eq("review_status", "approved")
+    .eq("outreach_status", "queued")
+    .is("release_claim_token", null)
+    .select("id")
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(
+      `Unable to claim campaign prospect: ${error.message}`
+    );
+  }
+
+  return Boolean(data);
+}
+
+async function returnDryRunClaimToQueue({
+  campaignId,
+  campaignProspectId,
+  claimToken,
+}: {
+  campaignId: string;
+  campaignProspectId: string;
+  claimToken: string;
+}): Promise<boolean> {
+  /*
+   * The claim token prevents this engine from returning a row
+   * owned by another invocation.
+   */
+  const { data, error } = await supabase
+    .from("campaign_prospects")
+    .update({
+      outreach_status: "queued",
+      release_claim_token: null,
+      release_claimed_at: null,
+    })
+    .eq("id", campaignProspectId)
+    .eq("campaign_id", campaignId)
+    .eq("outreach_status", "releasing")
+    .eq("release_claim_token", claimToken)
+    .select("id")
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(
+      `Unable to return dry-run claim to queue: ${error.message}`
+    );
+  }
+
+  return Boolean(data);
+}
+
+async function writeClaimEvent({
+  engineRunId,
+  campaignId,
+  campaignProspectId,
+  prospectId,
+  eventType,
+  decisionCode,
+  decisionReason,
+  claimToken,
+}: {
+  engineRunId: string;
+  campaignId: string;
+  campaignProspectId: string;
+  prospectId: string;
+  eventType:
+    | "campaign.prospect_claimed"
+    | "campaign.prospect_claim_released"
+    | "campaign.prospect_claim_failed";
+  decisionCode: string;
+  decisionReason: string;
+  claimToken: string;
+}) {
+  const { error } = await supabase
+    .from("campaign_events")
+    .insert({
+      campaign_id: campaignId,
+      campaign_prospect_id: campaignProspectId,
+      prospect_id: prospectId,
+      source_system: "growth_engine",
+      event_type: eventType,
+      decision_code: decisionCode,
+      decision_source: "release_engine",
+      engine_run_id: engineRunId,
+      event_data: {
+        dry_run: true,
+        engine_name: ENGINE_NAME,
+        engine_version: ENGINE_VERSION,
+        claim_token: claimToken,
+        decision_reason: decisionReason,
+        occurred_at: new Date().toISOString(),
+      },
+    });
+
+  if (error) {
+    throw new Error(
+      `Unable to write ${eventType}: ${error.message}`
+    );
+  }
+}
+
 async function evaluateCampaign({
   engineRunId,
   campaign,
@@ -456,6 +585,7 @@ async function evaluateCampaign({
       queuedCount: memberships.length,
       evaluatedCount: 0,
       wouldReleaseCount: 0,
+      atomicClaims: 0,
       decisions,
     };
   }
@@ -503,117 +633,199 @@ async function evaluateCampaign({
    * records would be skipped but changes no campaign status.
    */
   for (const membership of memberships) {
-    const prospect = prospectById.get(
-      membership.prospect_id
-    );
+  const prospect = prospectById.get(
+    membership.prospect_id
+  );
 
-    let decisionCode = "";
-    let decisionReason = "";
-    let wouldRelease = false;
-    let email = "";
+  let decisionCode = "";
+  let decisionReason = "";
+  let wouldRelease = false;
+  let atomicClaimed = false;
+  let email = "";
 
-    if (!prospect) {
-      decisionCode = "prospect_not_found";
+  if (!prospect) {
+    decisionCode = "prospect_not_found";
+    decisionReason =
+      "The campaign membership has no associated prospect record.";
+  } else {
+    email = normalizeEmail(prospect.email);
+
+    const marketingStatus =
+      normalizeText(prospect.marketing_status) ||
+      "eligible";
+
+    if (!isValidEmail(email)) {
+      decisionCode = "invalid_email";
       decisionReason =
-        "The campaign membership has no associated prospect record.";
+        "The prospect does not have a valid email address.";
+    } else if (marketingStatus !== "eligible") {
+      decisionCode = "marketing_ineligible";
+      decisionReason =
+        `Marketing status is ${marketingStatus}.`;
+    } else if (
+      membership.release_attempt_count >=
+      campaign.max_release_attempts
+    ) {
+      decisionCode = "maximum_attempts_reached";
+      decisionReason =
+        `The prospect has reached the maximum of ` +
+        `${campaign.max_release_attempts} release attempts.`;
+    } else if (await isSuppressed(email)) {
+      decisionCode = "globally_suppressed";
+      decisionReason =
+        "The normalized email exists in marketing_suppressions.";
     } else {
-      email = normalizeEmail(prospect.email);
-      const marketingStatus =
-        normalizeText(prospect.marketing_status) ||
-        "eligible";
+      /*
+       * The prospect passed evaluation. Now attempt exclusive
+       * ownership before declaring that this engine could
+       * release it.
+       */
+      const claimToken = randomUUID();
+      const claimedAt = new Date().toISOString();
 
-      if (!isValidEmail(email)) {
-        decisionCode = "invalid_email";
+      atomicClaimed = await claimCampaignProspect({
+        campaignId: campaign.id,
+        campaignProspectId: membership.id,
+        claimToken,
+        claimedAt,
+      });
+
+      if (!atomicClaimed) {
+        decisionCode = "atomic_claim_failed";
         decisionReason =
-          "The prospect does not have a valid email address.";
-      } else if (marketingStatus !== "eligible") {
-        decisionCode = "marketing_ineligible";
-        decisionReason = `Marketing status is ${marketingStatus}.`;
-      } else if (
-        membership.release_attempt_count >=
-        campaign.max_release_attempts
-      ) {
-        decisionCode = "maximum_attempts_reached";
-        decisionReason =
-          `The prospect has reached the maximum of ` +
-          `${campaign.max_release_attempts} release attempts.`;
-      } else if (await isSuppressed(email)) {
-        decisionCode = "globally_suppressed";
-        decisionReason =
-          "The normalized email exists in marketing_suppressions.";
+          "Another engine invocation claimed the prospect first.";
+
+        await writeClaimEvent({
+          engineRunId,
+          campaignId: campaign.id,
+          campaignProspectId: membership.id,
+          prospectId: membership.prospect_id,
+          eventType: "campaign.prospect_claim_failed",
+          decisionCode,
+          decisionReason,
+          claimToken,
+        });
       } else {
-        decisionCode = "would_release";
+        decisionCode = "atomic_claim_success";
         decisionReason =
-          "The prospect passed the current dry-run release checks.";
+          "The prospect was claimed exclusively and would be released.";
+
         wouldRelease = true;
+
+        await writeClaimEvent({
+          engineRunId,
+          campaignId: campaign.id,
+          campaignProspectId: membership.id,
+          prospectId: membership.prospect_id,
+          eventType: "campaign.prospect_claimed",
+          decisionCode,
+          decisionReason,
+          claimToken,
+        });
+
+        /*
+         * Commit 2 remains non-delivery. Return the record to
+         * the queue only if this invocation still owns it.
+         */
+        const returnedToQueue =
+          await returnDryRunClaimToQueue({
+            campaignId: campaign.id,
+            campaignProspectId: membership.id,
+            claimToken,
+          });
+
+        if (!returnedToQueue) {
+          throw new Error(
+            "The dry-run claim could not be safely returned to the queue."
+          );
+        }
+
+        await writeClaimEvent({
+          engineRunId,
+          campaignId: campaign.id,
+          campaignProspectId: membership.id,
+          prospectId: membership.prospect_id,
+          eventType:
+            "campaign.prospect_claim_released",
+          decisionCode: "dry_run_claim_released",
+          decisionReason:
+            "The dry-run claim was safely returned to the queue.",
+          claimToken,
+        });
       }
-    }
-
-    const decision: CampaignDecision = {
-      campaignId: campaign.id,
-      campaignName: campaign.name,
-      campaignProspectId: membership.id,
-      prospectId: membership.prospect_id,
-      email: email || undefined,
-      decisionCode,
-      decisionReason,
-      wouldRelease,
-    };
-
-    decisions.push(decision);
-
-    await writeEvaluationEvent({
-      engineRunId,
-      campaignId: campaign.id,
-      campaignProspectId: membership.id,
-      prospectId: membership.prospect_id,
-      decisionCode,
-      decisionReason,
-      eventData: {
-        email: email || null,
-        queue_position_evaluated:
-          decisions.length,
-        release_attempt_count:
-          membership.release_attempt_count,
-        max_release_attempts:
-          campaign.max_release_attempts,
-        next_attempt_at:
-          membership.next_attempt_at,
-        would_release: wouldRelease,
-      },
-    });
-
-    /*
-     * Version one releases at most one prospect per campaign
-     * per engine run. Stop once that prospect is identified.
-     */
-    if (wouldRelease) {
-      break;
     }
   }
 
-  return {
+  const decision: CampaignDecision = {
     campaignId: campaign.id,
     campaignName: campaign.name,
-    campaignCode: campaign.campaign_code,
-    status: campaign.status,
-    insideSendWindow: insideWindow,
-    localDate: zonedNow.dateKey,
-    localTime: zonedNow.timeLabel,
-    dailyLimit: campaign.daily_send_limit,
-    releasedToday,
-    remainingToday,
-    intervalMinutes:
-      campaign.release_interval_minutes,
-    intervalElapsed,
-    queuedCount: memberships.length,
-    evaluatedCount: decisions.length,
-    wouldReleaseCount: decisions.filter(
-      (decision) => decision.wouldRelease
-    ).length,
-    decisions,
+    campaignProspectId: membership.id,
+    prospectId: membership.prospect_id,
+    email: email || undefined,
+    decisionCode,
+    decisionReason,
+    wouldRelease,
+    atomicClaimed,
   };
+
+  decisions.push(decision);
+
+  await writeEvaluationEvent({
+    engineRunId,
+    campaignId: campaign.id,
+    campaignProspectId: membership.id,
+    prospectId: membership.prospect_id,
+    decisionCode,
+    decisionReason,
+    eventData: {
+      email: email || null,
+      queue_position_evaluated:
+        decisions.length,
+      release_attempt_count:
+        membership.release_attempt_count,
+      max_release_attempts:
+        campaign.max_release_attempts,
+      next_attempt_at:
+        membership.next_attempt_at,
+      would_release: wouldRelease,
+      atomic_claimed: atomicClaimed,
+    },
+  });
+
+    /*
+   * Stop once this run successfully claims its one candidate.
+   * A failed claim may continue to the next queued row.
+   */
+  if (atomicClaimed) {
+    break;
+  }
 }
+
+return {
+  campaignId: campaign.id,
+  campaignName: campaign.name,
+  campaignCode: campaign.campaign_code,
+  status: campaign.status,
+  insideSendWindow: insideWindow,
+  localDate: zonedNow.dateKey,
+  localTime: zonedNow.timeLabel,
+  dailyLimit: campaign.daily_send_limit,
+  releasedToday,
+  remainingToday,
+  intervalMinutes: campaign.release_interval_minutes,
+  intervalElapsed,
+  queuedCount: memberships.length,
+  evaluatedCount: decisions.length,
+  wouldReleaseCount: decisions.filter(
+    (decision) => decision.wouldRelease
+  ).length,
+  atomicClaims: decisions.filter(
+    (decision) => decision.atomicClaimed
+  ).length,
+  decisions,
+};
+}
+
 
 async function runDryReleaseEngine() {
   const startedAt = new Date();
@@ -700,6 +912,13 @@ async function runDryReleaseEngine() {
         0
       );
 
+    const atomicClaims =
+      campaignSummaries.reduce(
+        (total, campaign) =>
+          total + campaign.atomicClaims,
+        0
+      );
+
     const completedAt = new Date();
 
     const resultSummary = {
@@ -714,6 +933,7 @@ async function runDryReleaseEngine() {
       prospects_evaluated: prospectsEvaluated,
       prospects_would_release:
         prospectsWouldRelease,
+      atomic_claims: atomicClaims,
       prospects_released: 0,
       campaigns: campaignSummaries,
     };
@@ -725,6 +945,7 @@ async function runDryReleaseEngine() {
         status: "completed",
         campaigns_checked: campaigns.length,
         prospects_evaluated: prospectsEvaluated,
+        atomic_claims: atomicClaims,
         prospects_stopped: 0,
         prospects_released: 0,
         prospects_failed: 0,
