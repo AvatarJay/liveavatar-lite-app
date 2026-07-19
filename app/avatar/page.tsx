@@ -13,7 +13,7 @@ const sponsors = [
   { name: "State Farm Agent Marty Saiz", logo: "/marty-saiz.jpg" },
   { name: "Turbo Threads", logo: "/turbo-threads.jpg" },
   { name: "Reytek", logo: "/reytek.jpg" },
-  { name: "Albuquerque The Magazine", logo: "/AbqTheMag-LogoWhite.png" },
+  { name: "Albuquerque The Magazine", logo: "/AbqTheMag.jpg" },
 ];
 
 type TranscriptEntry = {
