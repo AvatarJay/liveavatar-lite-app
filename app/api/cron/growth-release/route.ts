@@ -7,8 +7,12 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const ENGINE_NAME = "Chef-iT Growth Engine";
-const ENGINE_VERSION = "1.0.0";
+const ENGINE_VERSION = "1.1.0";
 const MAX_QUEUE_ROWS_PER_CAMPAIGN = 250;
+const DEFAULT_RESEND_OUTREACH_EVENT =
+  "creator.outreach.started";
+
+const RETRY_DELAY_MINUTES = 60;
 
 type GrowthCampaignRow = {
   id: string;
@@ -91,6 +95,7 @@ type CampaignDecision = {
   wouldRelease: boolean;
   atomicClaimed: boolean;
   stopped: boolean;
+  released: boolean;
 };
 
 type CampaignSummary = {
@@ -111,7 +116,18 @@ type CampaignSummary = {
   wouldReleaseCount: number;
   atomicClaims: number;
   stoppedCount: number;
+  releasedCount: number;
   decisions: CampaignDecision[];
+};
+
+type ResendEventResult = {
+  success: boolean;
+  status: number;
+  handoffId: string | null;
+  responseBody: Record<string, unknown> | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  retryable: boolean;
 };
 
 function normalizeText(
@@ -269,7 +285,7 @@ async function writeEvaluationEvent({
       decision_source: "release_engine",
       engine_run_id: engineRunId,
       event_data: {
-        dry_run: true,
+        dry_run: false,
         engine_name: ENGINE_NAME,
         engine_version: ENGINE_VERSION,
         decision_reason: decisionReason,
@@ -490,6 +506,156 @@ async function findExistingCustomer(
   };
 }
 
+
+async function sendCreatorOutreachEvent({
+  email,
+  greetingName,
+  displayName,
+  campaignCode,
+  campaignName,
+  prospectId,
+  campaignProspectId,
+  trackingToken,
+}: {
+  email: string;
+  greetingName: string;
+  displayName: string;
+  campaignCode: string;
+  campaignName: string;
+  prospectId: string;
+  campaignProspectId: string;
+  trackingToken: string;
+}): Promise<ResendEventResult> {
+  const apiKey = process.env.RESEND_API_KEY?.trim();
+
+  const eventName =
+    process.env.RESEND_CREATOR_OUTREACH_EVENT?.trim() ||
+    DEFAULT_RESEND_OUTREACH_EVENT;
+
+  if (!apiKey) {
+    throw new Error(
+      "RESEND_API_KEY is not configured."
+    );
+  }
+
+  let response: Response;
+
+try {
+  response = await fetch(
+    "https://api.resend.com/events/send",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "Idempotency-Key":
+          `growth-release/${campaignProspectId}`,
+      },
+      body: JSON.stringify({
+        event: eventName,
+        email,
+        payload: {
+          greeting_name: greetingName,
+          display_name: displayName,
+          campaign_code: campaignCode,
+          campaign_name: campaignName,
+          promo_code: "CHEFITCREATOR001",
+          prospect_id: prospectId,
+          campaign_prospect_id:
+            campaignProspectId,
+          tracking_token: trackingToken,
+        },
+      }),
+      cache: "no-store",
+    }
+  );
+} catch (error) {
+  return {
+    success: false,
+    status: 0,
+    handoffId: null,
+    responseBody: null,
+    errorCode: "resend_network_error",
+    errorMessage:
+      error instanceof Error
+        ? error.message
+        : "Unable to connect to Resend.",
+    retryable: true,
+  };
+}
+
+  let responseBody:
+    | Record<string, unknown>
+    | null = null;
+
+  try {
+    responseBody =
+      (await response.json()) as Record<
+        string,
+        unknown
+      >;
+  } catch {
+    responseBody = null;
+  }
+
+  const bodyId =
+    typeof responseBody?.id === "string"
+      ? responseBody.id
+      : null;
+
+  const eventId =
+    typeof responseBody?.event_id === "string"
+      ? responseBody.event_id
+      : null;
+
+  if (response.ok) {
+    return {
+      success: true,
+      status: response.status,
+
+      /*
+       * Use Resend's returned identifier when available.
+       * The campaign membership ID is a stable local fallback.
+       */
+      handoffId:
+        bodyId || eventId || campaignProspectId,
+
+      responseBody,
+      errorCode: null,
+      errorMessage: null,
+      retryable: false,
+    };
+  }
+
+  const errorName =
+    typeof responseBody?.name === "string"
+      ? responseBody.name
+      : null;
+
+  const errorMessage =
+    typeof responseBody?.message === "string"
+      ? responseBody.message
+      : `Resend returned HTTP ${response.status}.`;
+
+  const retryable =
+    response.status === 408 ||
+    response.status === 409 ||
+    response.status === 429 ||
+    response.status >= 500;
+
+  return {
+    success: false,
+    status: response.status,
+    handoffId: null,
+    responseBody,
+    errorCode:
+      errorName || `resend_http_${response.status}`,
+    errorMessage,
+    retryable,
+  };
+}
+
+
 async function claimCampaignProspect({
   campaignId,
   campaignProspectId,
@@ -530,7 +696,7 @@ async function claimCampaignProspect({
   return Boolean(data);
 }
 
-async function returnDryRunClaimToQueue({
+async function returnClaimToQueue({
   campaignId,
   campaignProspectId,
   claimToken,
@@ -559,11 +725,159 @@ async function returnDryRunClaimToQueue({
 
   if (error) {
     throw new Error(
-      `Unable to return dry-run claim to queue: ${error.message}`
+      `Unable to return claim to queue: ${error.message}`
     );
   }
 
   return Boolean(data);
+}
+
+async function finalizeSuccessfulRelease({
+  campaignId,
+  campaignProspectId,
+  claimToken,
+  releasedAt,
+  resendHandoffId,
+  releaseAttemptCount,
+}: {
+  campaignId: string;
+  campaignProspectId: string;
+  claimToken: string;
+  releasedAt: string;
+  resendHandoffId: string;
+  releaseAttemptCount: number;
+}): Promise<boolean> {
+  const { data, error } = await supabase
+    .from("campaign_prospects")
+    .update({
+      outreach_status: "released",
+      released_at: releasedAt,
+      release_attempted_at: releasedAt,
+      release_attempt_count:
+        releaseAttemptCount + 1,
+      resend_handoff_id: resendHandoffId,
+      decision_reason:
+        "Successfully admitted to the Resend creator outreach automation.",
+      stop_reason: null,
+      next_attempt_at: null,
+      release_error_code: null,
+      release_error_message: null,
+      release_claim_token: null,
+      release_claimed_at: null,
+    })
+    .eq("id", campaignProspectId)
+    .eq("campaign_id", campaignId)
+    .eq("outreach_status", "releasing")
+    .eq("release_claim_token", claimToken)
+    .select("id")
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(
+      `Unable to finalize successful release: ${error.message}`
+    );
+  }
+
+  return Boolean(data);
+}
+
+async function returnFailedHandoffToQueue({
+  campaignId,
+  campaignProspectId,
+  claimToken,
+  attemptedAt,
+  nextAttemptAt,
+  releaseAttemptCount,
+  errorCode,
+  errorMessage,
+}: {
+  campaignId: string;
+  campaignProspectId: string;
+  claimToken: string;
+  attemptedAt: string;
+  nextAttemptAt: string;
+  releaseAttemptCount: number;
+  errorCode: string;
+  errorMessage: string;
+}): Promise<boolean> {
+  const { data, error } = await supabase
+    .from("campaign_prospects")
+    .update({
+      outreach_status: "queued",
+      release_attempted_at: attemptedAt,
+      release_attempt_count:
+        releaseAttemptCount + 1,
+      next_attempt_at: nextAttemptAt,
+      release_error_code: errorCode,
+      release_error_message: errorMessage,
+      release_claim_token: null,
+      release_claimed_at: null,
+    })
+    .eq("id", campaignProspectId)
+    .eq("campaign_id", campaignId)
+    .eq("outreach_status", "releasing")
+    .eq("release_claim_token", claimToken)
+    .select("id")
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(
+      `Unable to return failed handoff to queue: ${error.message}`
+    );
+  }
+
+  return Boolean(data);
+}
+
+
+async function writeResendHandoffEvent({
+  engineRunId,
+  campaignId,
+  campaignProspectId,
+  prospectId,
+  eventType,
+  decisionCode,
+  decisionReason,
+  eventData,
+}: {
+  engineRunId: string;
+  campaignId: string;
+  campaignProspectId: string;
+  prospectId: string;
+  eventType:
+    | "campaign.prospect_resend_handoff_started"
+    | "campaign.prospect_resend_handoff_succeeded"
+    | "campaign.prospect_resend_handoff_failed"
+    | "campaign.prospect_released";
+  decisionCode: string;
+  decisionReason: string;
+  eventData: Record<string, unknown>;
+}) {
+  const { error } = await supabase
+    .from("campaign_events")
+    .insert({
+      campaign_id: campaignId,
+      campaign_prospect_id: campaignProspectId,
+      prospect_id: prospectId,
+      source_system: "growth_engine",
+      event_type: eventType,
+      decision_code: decisionCode,
+      decision_source: "release_engine",
+      engine_run_id: engineRunId,
+      event_data: {
+        engine_name: ENGINE_NAME,
+        engine_version: ENGINE_VERSION,
+        decision_reason: decisionReason,
+        occurred_at: new Date().toISOString(),
+        ...eventData,
+      },
+    });
+
+  if (error) {
+    throw new Error(
+      `Unable to write ${eventType}: ${error.message}`
+    );
+  }
 }
 
 async function stopClaimedProspect({
@@ -701,7 +1015,7 @@ async function writeClaimEvent({
       decision_source: "release_engine",
       engine_run_id: engineRunId,
       event_data: {
-        dry_run: true,
+        dry_run: false,
         engine_name: ENGINE_NAME,
         engine_version: ENGINE_VERSION,
         claim_token: claimToken,
@@ -751,7 +1065,7 @@ async function writeCustomerTransitionEvent({
       decision_source: "release_engine",
       engine_run_id: engineRunId,
       event_data: {
-        dry_run_delivery: true,
+        dry_run_delivery: false,
         engine_name: ENGINE_NAME,
         engine_version: ENGINE_VERSION,
         decision_reason: decisionReason,
@@ -886,6 +1200,7 @@ async function evaluateCampaign({
       wouldReleaseCount: 0,
       atomicClaims: 0,
       stoppedCount: 0,
+      releasedCount: 0,
       decisions,
     };
   }
@@ -929,8 +1244,8 @@ async function evaluateCampaign({
 
   /*
    * The engine evaluates queued prospects until it finds one
-   * releasable candidate. Existing customers may be permanently
-   * stopped, but no email is delivered during Commit 3.
+   * releasable candidate. Existing customers are permanently
+   * stopped; the first eligible prospect is handed to Resend.
    */
   for (const membership of memberships) {
   const prospect = prospectById.get(
@@ -942,6 +1257,7 @@ async function evaluateCampaign({
   let wouldRelease = false;
   let atomicClaimed = false;
   let stopped = false;
+  let released = false;
   let email = "";
 
   if (!prospect) {
@@ -1120,39 +1436,238 @@ async function evaluateCampaign({
             },
           });
         } else {
-          decisionCode = "atomic_claim_success";
-          decisionReason =
-            "The prospect was claimed exclusively and would be released.";
+  wouldRelease = true;
 
-          wouldRelease = true;
+  const greetingName =
+    normalizeText(prospect.greeting_name) ||
+    normalizeText(prospect.display_name) ||
+    "Chef";
 
-          const returnedToQueue =
-            await returnDryRunClaimToQueue({
-              campaignId: campaign.id,
-              campaignProspectId: membership.id,
-              claimToken,
-            });
+  const displayName =
+    normalizeText(prospect.display_name) ||
+    greetingName;
 
-          if (!returnedToQueue) {
-            throw new Error(
-              "The dry-run claim could not be safely returned to the queue."
-            );
-          }
+  const trackingToken =
+    normalizeText(membership.tracking_token) ||
+    membership.id;
 
-          await writeClaimEvent({
-            engineRunId,
-            campaignId: campaign.id,
-            campaignProspectId: membership.id,
-            prospectId: membership.prospect_id,
-            eventType:
-              "campaign.prospect_claim_released",
-            decisionCode:
-              "dry_run_claim_released",
-            decisionReason:
-              "The releasable dry-run claim was safely returned to the queue.",
-            claimToken,
-          });
-        }
+  await writeResendHandoffEvent({
+    engineRunId,
+    campaignId: campaign.id,
+    campaignProspectId: membership.id,
+    prospectId: membership.prospect_id,
+    eventType:
+      "campaign.prospect_resend_handoff_started",
+    decisionCode: "resend_handoff_started",
+    decisionReason:
+      "The claimed prospect is being submitted to the Resend creator outreach automation.",
+    eventData: {
+      email,
+      claim_token: claimToken,
+      resend_event:
+        process.env
+          .RESEND_CREATOR_OUTREACH_EVENT ||
+        DEFAULT_RESEND_OUTREACH_EVENT,
+    },
+  });
+
+  const handoff = await sendCreatorOutreachEvent({
+    email,
+    greetingName,
+    displayName,
+    campaignCode: campaign.campaign_code,
+    campaignName: campaign.name,
+    prospectId: membership.prospect_id,
+    campaignProspectId: membership.id,
+    trackingToken,
+  });
+
+  const attemptedAt = new Date().toISOString();
+
+  if (handoff.success && handoff.handoffId) {
+    const finalized =
+      await finalizeSuccessfulRelease({
+        campaignId: campaign.id,
+        campaignProspectId: membership.id,
+        claimToken,
+        releasedAt: attemptedAt,
+        resendHandoffId: handoff.handoffId,
+        releaseAttemptCount:
+          membership.release_attempt_count,
+      });
+
+    if (!finalized) {
+      throw new Error(
+        "Resend accepted the event, but the claimed prospect could not be finalized as released."
+      );
+    }
+
+    released = true;
+    decisionCode = "resend_handoff_success";
+    decisionReason =
+      "Resend accepted the creator outreach event and the prospect was released.";
+
+    await writeResendHandoffEvent({
+      engineRunId,
+      campaignId: campaign.id,
+      campaignProspectId: membership.id,
+      prospectId: membership.prospect_id,
+      eventType:
+        "campaign.prospect_resend_handoff_succeeded",
+      decisionCode,
+      decisionReason,
+      eventData: {
+        email,
+        resend_handoff_id:
+          handoff.handoffId,
+        resend_status: handoff.status,
+        resend_response:
+          handoff.responseBody,
+      },
+    });
+
+    await writeResendHandoffEvent({
+      engineRunId,
+      campaignId: campaign.id,
+      campaignProspectId: membership.id,
+      prospectId: membership.prospect_id,
+      eventType:
+        "campaign.prospect_released",
+      decisionCode: "released",
+      decisionReason:
+        "The prospect entered the Resend creator outreach automation.",
+      eventData: {
+        email,
+        released_at: attemptedAt,
+        resend_handoff_id:
+          handoff.handoffId,
+      },
+    });
+  } else {
+    const errorCode =
+      handoff.errorCode ||
+      "resend_handoff_failed";
+
+    const errorMessage =
+      handoff.errorMessage ||
+      "Resend did not accept the outreach event.";
+
+    /*
+     * Authentication and configuration failures should fail
+     * this engine run without permanently stopping the person.
+     */
+    if (
+      handoff.status === 401 ||
+      handoff.status === 403
+    ) {
+      const returnedToQueue =
+        await returnClaimToQueue({
+          campaignId: campaign.id,
+          campaignProspectId: membership.id,
+          claimToken,
+        });
+
+    if (!returnedToQueue) {
+      throw new Error(
+        "The Resend configuration failure claim could not be safely returned to the queue."
+      );
+  }
+
+  throw new Error(
+    `Resend configuration failure: ${errorMessage}`
+  );
+}
+
+if (!handoff.retryable) {
+  const returnedToQueue =
+    await returnClaimToQueue({
+      campaignId: campaign.id,
+      campaignProspectId: membership.id,
+      claimToken,
+    });
+
+  if (!returnedToQueue) {
+    throw new Error(
+      "The rejected Resend claim could not be safely returned to the queue."
+    );
+  }
+
+  await writeResendHandoffEvent({
+    engineRunId,
+    campaignId: campaign.id,
+    campaignProspectId: membership.id,
+    prospectId: membership.prospect_id,
+    eventType:
+      "campaign.prospect_resend_handoff_failed",
+    decisionCode: "resend_handoff_rejected",
+    decisionReason:
+      "Resend rejected the event with a non-retryable response.",
+    eventData: {
+      email,
+      resend_status: handoff.status,
+      error_code: errorCode,
+      error_message: errorMessage,
+      retryable: false,
+      resend_response: handoff.responseBody,
+    },
+  });
+
+  throw new Error(
+    `Resend rejected the outreach event: ${errorMessage}`
+  );
+}
+
+
+    const nextAttemptAt = new Date(
+      Date.now() +
+        RETRY_DELAY_MINUTES * 60 * 1000
+    ).toISOString();
+
+    const returnedToQueue =
+      await returnFailedHandoffToQueue({
+        campaignId: campaign.id,
+        campaignProspectId: membership.id,
+        claimToken,
+        attemptedAt,
+        nextAttemptAt,
+        releaseAttemptCount:
+          membership.release_attempt_count,
+        errorCode,
+        errorMessage,
+      });
+
+    if (!returnedToQueue) {
+      throw new Error(
+        "The failed Resend claim could not be safely returned to the queue."
+      );
+    }
+
+    decisionCode = "resend_temporary_failure";
+    decisionReason =
+      "Resend temporarily rejected the event; the prospect was queued for retry.";
+
+    await writeResendHandoffEvent({
+      engineRunId,
+      campaignId: campaign.id,
+      campaignProspectId: membership.id,
+      prospectId: membership.prospect_id,
+      eventType:
+        "campaign.prospect_resend_handoff_failed",
+      decisionCode,
+      decisionReason,
+      eventData: {
+        email,
+        resend_status: handoff.status,
+        error_code: errorCode,
+        error_message: errorMessage,
+        retryable: handoff.retryable,
+        next_attempt_at: nextAttemptAt,
+        resend_response:
+          handoff.responseBody,
+      },
+    });
+  }
+}
       }
     }
   }
@@ -1168,6 +1683,7 @@ async function evaluateCampaign({
     wouldRelease,
     atomicClaimed,
     stopped,
+    released,
   };
 
   decisions.push(decision);
@@ -1192,16 +1708,18 @@ async function evaluateCampaign({
       would_release: wouldRelease,
       atomic_claimed: atomicClaimed,
       stopped,
+      released,
     },
   });
 
-  /*
-   * Existing customers are stopped, then evaluation continues
-   * until one genuinely releasable prospect is identified.
-   */
-  if (wouldRelease) {
-    break;
-  }
+     /*
+      * One valid prospect is admitted per campaign interval.
+      * A failed handoff also ends this run so the engine does not
+      * race ahead after an external-service problem.
+      */
+     if (wouldRelease) {
+      break;
+    }
 }
 
 return {
@@ -1228,12 +1746,15 @@ return {
   stoppedCount: decisions.filter(
     (decision) => decision.stopped
   ).length,
+  releasedCount: decisions.filter(
+    (decision) => decision.released
+  ).length,
   decisions,
 };
 }
 
 
-async function runDryReleaseEngine() {
+async function runReleaseEngine() {
   const startedAt = new Date();
   const gitCommit = getGitCommit();
 
@@ -1247,7 +1768,7 @@ async function runDryReleaseEngine() {
         engine_version: ENGINE_VERSION,
         git_commit: gitCommit,
         result_summary: {
-          dry_run: true,
+          dry_run: false,
         },
       })
       .select("id")
@@ -1332,10 +1853,17 @@ async function runDryReleaseEngine() {
         0
       );
 
+    const prospectsReleased =
+      campaignSummaries.reduce(
+        (total, campaign) =>
+          total + campaign.releasedCount,
+        0
+      );
+
     const completedAt = new Date();
 
     const resultSummary = {
-      dry_run: true,
+      dry_run: false,
       engine_run_id: engineRunId,
       engine_name: ENGINE_NAME,
       engine_version: ENGINE_VERSION,
@@ -1348,7 +1876,7 @@ async function runDryReleaseEngine() {
         prospectsWouldRelease,
       atomic_claims: atomicClaims,
       prospects_stopped: prospectsStopped,
-      prospects_released: 0,
+      prospects_released: prospectsReleased,
       campaigns: campaignSummaries,
     };
 
@@ -1361,7 +1889,7 @@ async function runDryReleaseEngine() {
         prospects_evaluated: prospectsEvaluated,
         atomic_claims: atomicClaims,
         prospects_stopped: prospectsStopped,
-        prospects_released: 0,
+        prospects_released: prospectsReleased,
         prospects_failed: 0,
         result_summary: resultSummary,
         error_message: null,
@@ -1389,7 +1917,7 @@ async function runDryReleaseEngine() {
         status: "failed",
         error_message: message,
         result_summary: {
-          dry_run: true,
+          dry_run: false,
           engine_run_id: engineRunId,
           error: message,
         },
@@ -1420,7 +1948,7 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const result = await runDryReleaseEngine();
+    const result = await runReleaseEngine();
 
     return NextResponse.json(result, {
       status: 200,
@@ -1430,7 +1958,7 @@ export async function GET(request: NextRequest) {
     });
   } catch (error) {
     console.error(
-      "Release Engine dry run failed:",
+      "Release Engine run failed:",
       error
     );
 
@@ -1439,8 +1967,8 @@ export async function GET(request: NextRequest) {
         error:
           error instanceof Error
             ? error.message
-            : "Release Engine dry run failed.",
-        dry_run: true,
+            : "Release Engine run failed.",
+        dry_run: false,
       },
       {
         status: 500,
