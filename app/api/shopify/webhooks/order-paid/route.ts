@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
 import { Resend } from "resend";
+import { convertCreatorOutreach } from "@/lib/growth/convert-creator-outreach";
 
 export const runtime = "nodejs";
 
@@ -215,6 +216,26 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: transactionError.message }, { status: 500 });
     }
 
+    let outreachConversion = null;
+
+    try {
+      outreachConversion = await convertCreatorOutreach({
+        email: customerEmail,
+        customerId: customer.id,
+        reason: "paid_purchase",
+        sourceId: shopifyOrderId,
+      });
+    } catch (conversionError) {
+      /*
+       * The order and wallet credit have already succeeded.
+       * Do not fail the Shopify webhook because outreach conversion failed.
+       */
+      console.error(
+        "[Shopify Webhook] Outreach conversion failed:",
+        conversionError
+      );
+    }
+
     try {
       await sendChefItPurchaseEmail(customerEmail, minutesPurchased);
     } catch (emailError) {
@@ -230,6 +251,7 @@ export async function POST(req: Request) {
       secondsPurchased,
       newMinutesBalance,
       newSecondsBalance,
+      outreachConversion,
     });
   } catch (error) {
     console.error("[Shopify Webhook] Unexpected error:", error);

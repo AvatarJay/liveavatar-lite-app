@@ -782,6 +782,60 @@ async function finalizeSuccessfulRelease({
   return Boolean(data);
 }
 
+async function finalizeSuccessfulReleaseWithRetry({
+  campaignId,
+  campaignProspectId,
+  claimToken,
+  releasedAt,
+  resendHandoffId,
+  releaseAttemptCount,
+}: {
+  campaignId: string;
+  campaignProspectId: string;
+  claimToken: string;
+  releasedAt: string;
+  resendHandoffId: string;
+  releaseAttemptCount: number;
+}): Promise<boolean> {
+  const maxAttempts = 3;
+  let lastError: unknown = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const finalized = await finalizeSuccessfulRelease({
+        campaignId,
+        campaignProspectId,
+        claimToken,
+        releasedAt,
+        resendHandoffId,
+        releaseAttemptCount,
+      });
+
+      if (finalized) {
+        return true;
+      }
+
+      lastError = new Error(
+        `Release finalization returned no matching row on attempt ${attempt}.`
+      );
+    } catch (error) {
+      lastError = error;
+    }
+
+    if (attempt < maxAttempts) {
+      await new Promise((resolve) =>
+        setTimeout(resolve, attempt * 500)
+      );
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(
+        "Unable to finalize the successful Resend handoff."
+      );
+}
+
 async function returnFailedHandoffToQueue({
   campaignId,
   campaignProspectId,
@@ -1487,7 +1541,7 @@ async function evaluateCampaign({
 
   if (handoff.success && handoff.handoffId) {
     const finalized =
-      await finalizeSuccessfulRelease({
+      await finalizeSuccessfulReleaseWithRetry({
         campaignId: campaign.id,
         campaignProspectId: membership.id,
         claimToken,
