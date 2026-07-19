@@ -40,3 +40,9 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 knowledge/
+benchmark-results/vector-20260713-160951/triple_threat_wow_D_minimal.json
+benchmark-results/vector-20260713-160951/triple_threat_B_smaller.json
+*.json
+*.csv
+
+!vercel.json
