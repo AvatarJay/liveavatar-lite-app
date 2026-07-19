@@ -566,6 +566,7 @@ try {
           tracking_token: trackingToken,
         },
       }),
+      signal: AbortSignal.timeout(15000),
       cache: "no-store",
     }
   );
