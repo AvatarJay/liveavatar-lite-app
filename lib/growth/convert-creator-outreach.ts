@@ -4,8 +4,7 @@ const DEFAULT_RESEND_CONVERTED_EVENT =
   "creator.outreach.converted";
 
 export type CreatorConversionReason =
-  | "first_session_started"
-  | "paid_purchase";
+  "first_session_started";
 
 type ConvertCreatorOutreachInput = {
   email: string;
@@ -239,10 +238,7 @@ export async function convertCreatorOutreach({
             source_campaign_id: membership.campaign_id,
             source_campaign_prospect_id: membership.id,
             relationship_reason: reason,
-            became_customer_at:
-              reason === "paid_purchase"
-                ? convertedAt
-                : null,
+            became_customer_at: null,
             last_activity_at: convertedAt,
           },
           {
