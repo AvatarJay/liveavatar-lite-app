@@ -1103,28 +1103,41 @@ export default function AvatarPage() {
     void loadCustomerAndWallet();
   }, []);
 
-  useEffect(() => {
-    function handleParentMessage(event: MessageEvent) {
-      if (event.data?.type !== "CHEFIT_START_SESSION") {
-        return;
-      }
+useEffect(() => {
+  function handleParentMessage(event: MessageEvent) {
+    const allowedShopifyOrigins = new Set([
+      "https://www.chasingtheflames.com",
+      "https://chasingtheflames.com",
+    ]);
 
-      console.log("[Chef-iT] Start session message received");
-
-      if (isStarting || room || showMicCheck) {
-        return;
-      }
-
-      setShowSessionComplete(false);
-      void beginGatedMicCheck();
+    if (!allowedShopifyOrigins.has(event.origin)) {
+      return;
     }
 
-    window.addEventListener("message", handleParentMessage);
+    if (event.source !== window.parent) {
+      return;
+    }
 
-    return () => {
-      window.removeEventListener("message", handleParentMessage);
-    };
-  }, [isStarting, room, showMicCheck, customerEmail]);
+    if (event.data?.type !== "CHEFIT_START_SESSION") {
+      return;
+    }
+
+    console.log("[Chef-iT] Start session message received");
+
+    if (isStarting || room || showMicCheck) {
+      return;
+    }
+
+    setShowSessionComplete(false);
+    void beginGatedMicCheck();
+  }
+
+  window.addEventListener("message", handleParentMessage);
+
+  return () => {
+    window.removeEventListener("message", handleParentMessage);
+  };
+}, [isStarting, room, showMicCheck, customerEmail]);
 
   useEffect(() => {
     if (!room) {
@@ -1488,6 +1501,22 @@ function downloadTranscript() {
     await beginMicCheck();
   }
 
+function openBuyMinutes() {
+  setShowSessionComplete(false);
+
+  if (window.parent !== window) {
+    window.parent.postMessage(
+      { type: "CHEFIT_OPEN_BUY_MINUTES" },
+      "*",
+    );
+
+    return;
+  }
+
+  window.location.href =
+    "https://www.chasingtheflames.com/pages/chef-it";
+}
+
   const startDisabled = isStarting || Boolean(room);
 
   return (
@@ -1708,53 +1737,55 @@ function downloadTranscript() {
         )}
 
         {showSessionComplete && !room && (
-          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/85 px-6 text-center">
-            <div className="w-full max-w-sm rounded-2xl bg-white p-8 text-black shadow-2xl">
-              <h2 className="text-3xl font-bold">👨‍🍳 Session Complete</h2>
+  <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/85 px-6 text-center">
+    <div className="w-full max-w-sm rounded-2xl bg-white p-8 text-black shadow-2xl">
+      <h2 className="text-3xl font-bold">👨‍🍳 Session Complete</h2>
 
-              <p className="mt-4 text-lg">
-                Thanks for cooking with Chef George!
-              </p>
+      <p className="mt-4 text-lg">
+        Thanks for cooking with Chef George!
+      </p>
 
-              <div className="mt-6 rounded-xl bg-zinc-100 p-4">
-                <p className="text-sm uppercase tracking-wide text-zinc-500">
-                  Remaining Time
-                </p>
-                <p className="mt-2 text-3xl font-bold">{formattedTime}</p>
-              </div>
+      <div className="mt-6 rounded-xl bg-zinc-100 p-4">
+        <p className="text-sm uppercase tracking-wide text-zinc-500">
+          Remaining Time
+        </p>
 
-              {timeRemaining > 0 ? (
-                <>
-                  <button
-                    onClick={async () => {
-                      setShowSessionComplete(false);
-                      await beginGatedMicCheck();
-                    }}
-                    className="mt-6 w-full rounded-full bg-black px-6 py-3 font-semibold text-white transition hover:bg-zinc-800"
-                  >
-                    ▶ Start Another Session
-                  </button>
+        <p className="mt-2 text-3xl font-bold">{formattedTime}</p>
+      </div>
 
-                  <a
-                    href="https://www.chasingtheflames.com/pages/chef-it"
-                    target="_top"
-                    className="mt-3 block w-full rounded-full bg-zinc-200 px-6 py-3 font-semibold text-black transition hover:bg-zinc-300"
-                  >
-                    Buy More Minutes
-                  </a>
-                </>
-              ) : (
-                <a
-                  href="https://www.chasingtheflames.com/pages/chef-it"
-                  target="_top"
-                  className="mt-6 block w-full rounded-full bg-black px-6 py-3 font-semibold text-white transition hover:bg-zinc-800"
-                >
-                  Buy More Minutes
-                </a>
-              )}
-            </div>
-          </div>
-        )}
+      {timeRemaining > 0 ? (
+        <>
+          <button
+            type="button"
+            onClick={async () => {
+              setShowSessionComplete(false);
+              await beginGatedMicCheck();
+            }}
+            className="mt-6 w-full rounded-full bg-black px-6 py-3 font-semibold text-white transition hover:bg-zinc-800"
+          >
+            ▶ Start Another Session
+          </button>
+
+          <button
+            type="button"
+            onClick={openBuyMinutes}
+            className="mt-3 w-full rounded-full bg-zinc-200 px-6 py-3 font-semibold text-black transition hover:bg-zinc-300"
+          >
+            Buy More Minutes
+          </button>
+        </>
+      ) : (
+        <button
+          type="button"
+          onClick={openBuyMinutes}
+          className="mt-6 w-full rounded-full bg-black px-6 py-3 font-semibold text-white transition hover:bg-zinc-800"
+        >
+          Buy More Minutes
+        </button>
+      )}
+    </div>
+  </div>
+)}
 
         {showTranscript && (
           <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 p-3 sm:p-6">
