@@ -17,33 +17,38 @@ function getPreferredName(relationship: any) {
 }
 
 function buildFirstMessage(relationship: any) {
-  if (!relationship) {
-    return "Welcome to Chef-it. I'm George Lovato Jr., the On-Call Outdoor Chef. What's happening?";
+  // First session: always use the full Chef-it introduction.
+  if (!relationship || !relationship.last_session_at) {
+    return "Welcome to Chef-it. I'm George Lovato Jr., the On-Call Outdoor Chef. What's cooking?";
   }
 
-  const preferredName = getPreferredName(relationship);
-  const name = preferredName || "there";
+  const preferredName = getPreferredName(relationship).trim();
 
-  if (!relationship.last_session_at) {
-    return `Welcome back, ${name}. What's happening?`;
+  // Returning customer with a known name.
+  if (preferredName) {
+    const namedGreetings = [
+      `Welcome back, ${preferredName}. What's happening?`,
+      `Good to see you again, ${preferredName}. What's cooking today?`,
+      `Hey ${preferredName}, welcome back. What can I help with today?`,
+      `Hi ${preferredName}, what's cooking today?`,
+    ];
+
+    return namedGreetings[
+      Math.floor(Math.random() * namedGreetings.length)
+    ];
   }
 
-  const lastSession = new Date(relationship.last_session_at).getTime();
-  const now = Date.now();
-  const daysSince = Math.floor((now - lastSession) / (1000 * 60 * 60 * 24));
-
-  if (daysSince >= 30) {
-    return `Welcome back, ${name}. It's been a little while. What's cooking today?`;
-  }
-
-  const greetings = [
-    `Welcome back, ${name}. What's happening?`,
-    `Good to see you again, ${name}. What's cooking today?`,
-    `Hey ${name}, welcome back. What can I help with today?`,
-    `Hi ${name}, what's cooking today?`,
+  // Returning customer without a known name.
+  const unnamedGreetings = [
+    "Welcome back. What's happening?",
+    "Good to see you again. What's cooking today?",
+    "Welcome back. What can I help with today?",
+    "Glad you're back. What's cooking?",
   ];
 
-  return greetings[Math.floor(Math.random() * greetings.length)];
+  return unnamedGreetings[
+    Math.floor(Math.random() * unnamedGreetings.length)
+  ];
 }
 
 function formatRelationshipMemory(relationship: any) {
@@ -61,7 +66,7 @@ No useful customer history yet.
   const preferredName = getPreferredName(relationship);
 
   return `
-First Visit: false
+First Visit: ${relationship.last_session_at ? "false" : "true"}
 Preferred Name: ${preferredName}
 Last Session: ${relationship.last_session_at || ""}
 
