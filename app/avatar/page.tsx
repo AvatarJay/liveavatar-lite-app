@@ -6,8 +6,6 @@ import { Room, RoomEvent, RemoteTrack } from "livekit-client";
 import { PERFORMANCE_CONFIG } from "@/lib/performance-config";
 
 const SESSION_SECONDS = 20 * 60;
-const SESSION_LIMIT_MESSAGE =
-  "Each live session lasts up to 20 minutes. Any unused minutes remain available for your next session.";
 const GATHERING_INDICATOR_MESSAGE = "Chef George is gathering your answer...";
 const GATHERING_INDICATOR_TIMEOUT_MS = 20_000;
 
@@ -1782,22 +1780,24 @@ function openBuyMinutes() {
   !showSessionComplete && (
     <div className="absolute bottom-3 left-0 right-0 z-30 flex justify-center px-4 sm:bottom-5">
       <div className="flex w-full max-w-sm flex-col gap-3 sm:w-auto sm:max-w-none sm:flex-row sm:items-start sm:gap-4">
-        <div className="flex w-full flex-col items-center sm:w-auto">
-          <button
-            onClick={beginGatedMicCheck}
-            disabled={startDisabled}
-            className={`w-full rounded-full px-6 py-3 font-semibold sm:w-auto ${
-              startDisabled
-                ? "cursor-not-allowed bg-zinc-500 text-zinc-300"
-                : "bg-white text-black"
-            }`}
-          >
-            {isStarting
-              ? "Starting..."
-              : room
-                ? "Session Running"
-                : "Start Session"}
-          </button>
+        
+<div className="flex w-full flex-col items-center sm:w-auto">
+  <button
+    onClick={beginGatedMicCheck}
+    disabled={startDisabled}
+    className={`w-full rounded-full px-6 py-3 font-semibold sm:w-auto ${
+      startDisabled
+        ? "cursor-not-allowed bg-zinc-500 text-zinc-300"
+        : "bg-white text-black"
+    }`}
+  >
+    {isStarting
+      ? "Starting..."
+      : room
+        ? "Session Running"
+        : "Start Session"}
+  </button>
+</div>
 
           {!room && !isStarting && (
             <p className="mt-2 max-w-xs text-center text-[11px] leading-snug text-zinc-300 sm:text-xs">
