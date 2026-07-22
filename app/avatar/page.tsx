@@ -1533,7 +1533,7 @@ function downloadTranscript() {
       setTimeRemaining(secondsAvailable);
       setCurrentSessionTime(secondsAvailable);
 
-return true;
+      return true;
     } catch (error) {
       console.error("[Minute Gate Error]", error);
       alert(
@@ -1775,58 +1775,46 @@ function openBuyMinutes() {
             </div>
           )}
 
-        {!showSponsor &&
-  !showMicCheck &&
-  !showSessionComplete && (
-    <div className="absolute bottom-3 left-0 right-0 z-30 flex justify-center px-4 sm:bottom-5">
-      <div className="flex w-full max-w-sm flex-col gap-3 sm:w-auto sm:max-w-none sm:flex-row sm:items-start sm:gap-4">
-        
-<div className="flex w-full flex-col items-center sm:w-auto">
-  <button
-    onClick={beginGatedMicCheck}
-    disabled={startDisabled}
-    className={`w-full rounded-full px-6 py-3 font-semibold sm:w-auto ${
-      startDisabled
-        ? "cursor-not-allowed bg-zinc-500 text-zinc-300"
-        : "bg-white text-black"
-    }`}
-  >
-    {isStarting
-      ? "Starting..."
-      : room
-        ? "Session Running"
-        : "Start Session"}
-  </button>
-</div>
+        {!showSponsor && !showMicCheck && !showSessionComplete && (
+  <div className="absolute bottom-3 left-0 right-0 z-30 flex justify-center px-4 sm:bottom-5">
+    <div className="flex w-full max-w-sm flex-col gap-3 sm:w-auto sm:max-w-none sm:flex-row sm:items-start sm:gap-4">
+      <button
+        onClick={beginGatedMicCheck}
+        disabled={startDisabled}
+        className={`w-full rounded-full px-6 py-3 font-semibold sm:w-auto ${
+          startDisabled
+            ? "cursor-not-allowed bg-zinc-500 text-zinc-300"
+            : "bg-white text-black"
+        }`}
+      >
+        {isStarting
+          ? "Starting..."
+          : room
+            ? "Session Running"
+            : "Start Session"}
+      </button>
 
-          {!room && !isStarting && (
-            <p className="mt-2 max-w-xs text-center text-[11px] leading-snug text-zinc-300 sm:text-xs">
-              {SESSION_LIMIT_MESSAGE}
-            </p>
-          )}
-        </div>
+      <button
+        onClick={stopAvatar}
+        disabled={!room}
+        className={`w-full rounded-full px-6 py-3 font-semibold sm:w-auto ${
+          room
+            ? "bg-red-600 text-white"
+            : "cursor-not-allowed bg-zinc-800 text-zinc-500"
+        }`}
+      >
+        End Session
+      </button>
 
-        <button
-          onClick={stopAvatar}
-          disabled={!room}
-          className={`w-full rounded-full px-6 py-3 font-semibold sm:w-auto ${
-            room
-              ? "bg-red-600 text-white"
-              : "cursor-not-allowed bg-zinc-800 text-zinc-500"
-          }`}
-        >
-          End Session
-        </button>
-
-        <button
-          onClick={() => setShowTranscript(true)}
-          className="w-full rounded-full bg-zinc-700 px-6 py-3 font-semibold text-white sm:w-auto"
-        >
-          Transcript
-        </button>
-      </div>
+      <button
+        onClick={() => setShowTranscript(true)}
+        className="w-full rounded-full bg-zinc-700 px-6 py-3 font-semibold text-white sm:w-auto"
+      >
+        Transcript
+      </button>
     </div>
-  )}
+  </div>
+)}
 
         {showSessionComplete && !room && (
   <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/85 px-6 text-center">
