@@ -5,7 +5,9 @@ import Image from "next/image";
 import { Room, RoomEvent, RemoteTrack } from "livekit-client";
 import { PERFORMANCE_CONFIG } from "@/lib/performance-config";
 
-const SESSION_SECONDS = 5 * 60;
+const SESSION_SECONDS = 20 * 60;
+const SESSION_LIMIT_MESSAGE =
+  "Each live session lasts up to 20 minutes. Any unused minutes remain available for your next session.";
 const GATHERING_INDICATOR_MESSAGE = "Chef George is gathering your answer...";
 const GATHERING_INDICATOR_TIMEOUT_MS = 20_000;
 
@@ -14,6 +16,8 @@ const sponsors = [
   { name: "Turbo Threads", logo: "/turbo-threads.jpg" },
   { name: "Reytek", logo: "/reytek.jpg" },
   { name: "Albuquerque The Magazine", logo: "/AbqTheMag.jpg" },
+  { name: "Chasing The Flames", logo: "/ChasingTheFlames-Logo.jpg" },
+  { name: "Wow Gooooood!!!", logo: "/WowGooooood!!!-Logo.jpg" },
 ];
 
 type TranscriptEntry = {
@@ -86,6 +90,9 @@ export default function AvatarPage() {
   const [currentSponsor, setCurrentSponsor] = useState(sponsors[0]);
   const [videoKey, setVideoKey] = useState(0);
   const [timeRemaining, setTimeRemaining] = useState(SESSION_SECONDS);
+  const [sessionTimeRemaining, setSessionTimeRemaining] =
+    useState(SESSION_SECONDS);
+  const sessionTimeRemainingRef = useRef(SESSION_SECONDS);
   const [showTranscript, setShowTranscript] = useState(false);
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
   const [isEmailing, setIsEmailing] = useState(false);
@@ -129,14 +136,31 @@ export default function AvatarPage() {
     console.log(`[Perf] ${label}: ${elapsed}`);
   }
 
-  const minutes = Math.floor(timeRemaining / 60);
-  const seconds = timeRemaining % 60;
-  const formattedTime = `${minutes}:${seconds.toString().padStart(2, "0")}`;
+function setCurrentSessionTime(walletSeconds: number) {
+  const cappedSeconds = Math.min(
+    SESSION_SECONDS,
+    Math.max(0, Math.floor(walletSeconds)),
+  );
 
-  const timerColor =
-    room && timeRemaining <= 60
-      ? "bg-red-600 text-white scale-125 animate-pulse shadow-lg"
-      : "bg-black/65 text-white";
+  sessionTimeRemainingRef.current = cappedSeconds;
+  setSessionTimeRemaining(cappedSeconds);
+}
+
+  const displayedTimeRemaining = room
+    ? sessionTimeRemaining
+    : timeRemaining;
+
+const minutes = Math.floor(displayedTimeRemaining / 60);
+const seconds = displayedTimeRemaining % 60;
+
+const formattedTime = `${minutes}:${seconds
+  .toString()
+  .padStart(2, "0")}`;
+
+const timerColor =
+  room && sessionTimeRemaining <= 60
+    ? "bg-red-600 text-white scale-125 animate-pulse shadow-lg"
+    : "bg-black/65 text-white";
 
   useEffect(() => {
     transcriptRef.current = transcript;
@@ -298,30 +322,30 @@ export default function AvatarPage() {
   }
 
   async function endSessionTracking() {
-    const sessionId = trackedSessionIdRef.current;
-    const startedAt = sessionStartedAtRef.current;
+  const sessionId = trackedSessionIdRef.current;
+  const startedAt = sessionStartedAtRef.current;
 
-    if (!sessionId || !startedAt) {
-      return;
-    }
+  if (!sessionId || !startedAt) {
+    return;
+  }
 
-    // Clear immediately so a new session cannot overwrite these references.
-    trackedSessionIdRef.current = null;
-    sessionStartedAtRef.current = null;
+  // Clear immediately so a new session cannot overwrite these references.
+  trackedSessionIdRef.current = null;
+  sessionStartedAtRef.current = null;
 
-    const durationSeconds = Math.max(
-      0,
-      Math.round((Date.now() - startedAt) / 1000),
-    );
+  const durationSeconds = Math.max(
+    0,
+    Math.round((Date.now() - startedAt) / 1000),
+  );
 
-    try {
-      const res = await fetch("/api/sessions/end", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sessionId,
-          durationSeconds,
-          transcript: buildTranscriptText(transcriptRef.current),
+  try {
+    const res = await fetch("/api/sessions/end", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId,
+        durationSeconds,
+        transcript: buildTranscriptText(transcriptRef.current),
       }),
     });
 
@@ -1140,33 +1164,89 @@ useEffect(() => {
 }, [isStarting, room, showMicCheck, customerEmail]);
 
   useEffect(() => {
-    if (!room) {
+  if (!room) {
+    return;
+  }
+
+  let tickInProgress = false;
+  let sessionEnded = false;
+
+  const sessionEndsAt = Date.now() + sessionTimeRemainingRef.current * 1000;
+
+  const interval = window.setInterval(async () => {
+    /*
+     * Calculate the session countdown from actual elapsed time.
+     * This keeps the 20-minute maximum accurate even if a wallet
+     * request is slow or temporarily fails.
+     */
+    const nextSessionTime = Math.max(
+      0,
+      Math.ceil((sessionEndsAt - Date.now()) / 1000),
+    );
+
+    sessionTimeRemainingRef.current = nextSessionTime;
+    setSessionTimeRemaining(nextSessionTime);
+
+    if (nextSessionTime <= 0 && !sessionEnded) {
+      sessionEnded = true;
+
+      addTranscriptEntry(
+        "System",
+        "Session ended. The 20-minute session limit was reached.",
+      );
+
+      window.clearInterval(interval);
+      stopAvatar();
       return;
     }
 
-    const interval = window.setInterval(async () => {
+    /*
+     * Prevent overlapping wallet requests if one request takes
+     * longer than one second.
+     */
+    if (tickInProgress) {
+      return;
+    }
+
+    tickInProgress = true;
+
+    try {
       const data = await spendOneSecond();
 
       if (!data) {
-        window.clearInterval(interval);
+        /*
+         * Log the wallet error, but do not remove the independent
+         * session timer. The 20-minute limit must keep running.
+         */
+        console.error(
+          "[Minute Spend] Wallet request failed; session timer continues.",
+        );
         return;
       }
 
-      const remaining = Number(data.remaining || 0);
-      setTimeRemaining(remaining);
+      const walletRemaining = Number(data.remaining || 0);
+      setTimeRemaining(walletRemaining);
 
-      if (remaining <= 0) {
+      if (walletRemaining <= 0 && !sessionEnded) {
+        sessionEnded = true;
+
         addTranscriptEntry(
           "System",
           "Session ended. Minute balance reached zero.",
         );
+
         window.clearInterval(interval);
         stopAvatar();
       }
-    }, 1000);
+    } finally {
+      tickInProgress = false;
+    }
+  }, 1000);
 
-    return () => window.clearInterval(interval);
-  }, [room]);
+  return () => {
+    window.clearInterval(interval);
+  };
+}, [room]);
 
   async function startAvatar() {
     if (isStarting || room) {
@@ -1451,9 +1531,11 @@ function downloadTranscript() {
       console.log("[Minute Gate] Time available:", data.display);
 
       const secondsAvailable = Number(data.seconds || 0);
-      setTimeRemaining(secondsAvailable);
 
-      return true;
+      setTimeRemaining(secondsAvailable);
+      setCurrentSessionTime(secondsAvailable);
+
+return true;
     } catch (error) {
       console.error("[Minute Gate Error]", error);
       alert(
@@ -1542,7 +1624,7 @@ function openBuyMinutes() {
 
           {!room && !isStarting && (
             <p className="mt-1 text-[10px] text-zinc-300 sm:text-xs">
-              Available time
+              Account time available
             </p>
           )}
         </div>
@@ -1695,46 +1777,56 @@ function openBuyMinutes() {
             </div>
           )}
 
-        {!showSponsor && !showMicCheck && (
-          <div className="absolute bottom-4 left-0 right-0 z-30 flex justify-center px-4 sm:bottom-5">
-            <div className="flex w-full max-w-sm flex-col gap-3 sm:w-auto sm:max-w-none sm:flex-row sm:gap-4">
-              <button
-                onClick={beginGatedMicCheck}
-                disabled={startDisabled}
-                className={`w-full rounded-full px-6 py-3 font-semibold sm:w-auto ${
-                  startDisabled
-                    ? "cursor-not-allowed bg-zinc-500 text-zinc-300"
-                    : "bg-white text-black"
-                }`}
-              >
-                {isStarting
-                  ? "Starting..."
-                  : room
-                    ? "Session Running"
-                    : "Start Session"}
-              </button>
+        {!showSponsor &&
+  !showMicCheck &&
+  !showSessionComplete && (
+    <div className="absolute bottom-3 left-0 right-0 z-30 flex justify-center px-4 sm:bottom-5">
+      <div className="flex w-full max-w-sm flex-col gap-3 sm:w-auto sm:max-w-none sm:flex-row sm:items-start sm:gap-4">
+        <div className="flex w-full flex-col items-center sm:w-auto">
+          <button
+            onClick={beginGatedMicCheck}
+            disabled={startDisabled}
+            className={`w-full rounded-full px-6 py-3 font-semibold sm:w-auto ${
+              startDisabled
+                ? "cursor-not-allowed bg-zinc-500 text-zinc-300"
+                : "bg-white text-black"
+            }`}
+          >
+            {isStarting
+              ? "Starting..."
+              : room
+                ? "Session Running"
+                : "Start Session"}
+          </button>
 
-              <button
-                onClick={stopAvatar}
-                disabled={!room}
-                className={`w-full rounded-full px-6 py-3 font-semibold sm:w-auto ${
-                  room
-                    ? "bg-red-600 text-white"
-                    : "cursor-not-allowed bg-zinc-800 text-zinc-500"
-                }`}
-              >
-                End Session
-              </button>
+          {!room && !isStarting && (
+            <p className="mt-2 max-w-xs text-center text-[11px] leading-snug text-zinc-300 sm:text-xs">
+              {SESSION_LIMIT_MESSAGE}
+            </p>
+          )}
+        </div>
 
-              <button
-                onClick={() => setShowTranscript(true)}
-                className="w-full rounded-full bg-zinc-700 px-6 py-3 font-semibold text-white sm:w-auto"
-              >
-                Transcript
-              </button>
-            </div>
-          </div>
-        )}
+        <button
+          onClick={stopAvatar}
+          disabled={!room}
+          className={`w-full rounded-full px-6 py-3 font-semibold sm:w-auto ${
+            room
+              ? "bg-red-600 text-white"
+              : "cursor-not-allowed bg-zinc-800 text-zinc-500"
+          }`}
+        >
+          End Session
+        </button>
+
+        <button
+          onClick={() => setShowTranscript(true)}
+          className="w-full rounded-full bg-zinc-700 px-6 py-3 font-semibold text-white sm:w-auto"
+        >
+          Transcript
+        </button>
+      </div>
+    </div>
+  )}
 
         {showSessionComplete && !room && (
   <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/85 px-6 text-center">
