@@ -106,6 +106,7 @@ export default function AvatarPage() {
 
   const trackedSessionIdRef = useRef<string | null>(null);
   const sessionStartedAtRef = useRef<number | null>(null);
+  const liveAvatarSessionIdRef = useRef<string | null>(null);
   const transcriptRef = useRef<TranscriptEntry[]>([]);
   const micStreamRef = useRef<MediaStream | null>(null);
   const animationRef = useRef<number | null>(null);
@@ -1126,6 +1127,70 @@ const timerColor =
   }, []);
 
 useEffect(() => {
+  if (!room) {
+    return;
+  }
+
+  let requestInProgress = false;
+
+  async function sendKeepAlive() {
+    const sessionId = liveAvatarSessionIdRef.current;
+
+    if (!sessionId || requestInProgress) {
+      return;
+    }
+
+    requestInProgress = true;
+
+    try {
+      const res = await fetch("/api/liveavatar/keep-alive", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          sessionId,
+        }),
+      });
+
+      if (!res.ok) {
+        const responseText = await res.text();
+
+        console.error(
+          "[LiveAvatar Keep Alive] Failed",
+          res.status,
+          responseText,
+        );
+
+        return;
+      }
+
+      console.log("[LiveAvatar Keep Alive] Successful");
+    } catch (error) {
+      console.error(
+        "[LiveAvatar Keep Alive] Request error",
+        error,
+      );
+    } finally {
+      requestInProgress = false;
+    }
+  }
+
+  // Confirm immediately that the keep-alive route is working.
+  void sendKeepAlive();
+
+  // Continue refreshing the active session once per minute.
+  const interval = window.setInterval(() => {
+    void sendKeepAlive();
+  }, 60_000);
+
+  return () => {
+    window.clearInterval(interval);
+  };
+}, [room]);
+
+
+useEffect(() => {
   function handleParentMessage(event: MessageEvent) {
     const allowedShopifyOrigins = new Set([
       "https://www.chasingtheflames.com",
@@ -1314,6 +1379,16 @@ useEffect(() => {
         return;
       }
 
+      if (!data.session_id || typeof data.session_id !== "string") {
+        console.error("[LiveAvatar] Missing session_id", data);
+        setStatus("Invalid LiveAvatar session response.");
+        setShowSponsor(false);
+        await endSessionTracking();
+        return;
+      }
+
+liveAvatarSessionIdRef.current = data.session_id;
+
       setStatus("Connecting Chef George...");
 
       const newRoom = new Room();
@@ -1370,11 +1445,11 @@ useEffect(() => {
         console.error("[Avatar UI] Microphone permission denied:", error);
         setStatus("Please allow microphone access and try again.");
         newRoom.disconnect();
+        liveAvatarSessionIdRef.current = null;
         setShowSponsor(false);
         await endSessionTracking();
         return;
       }
-
       setRoom(newRoom);
       setShowSponsor(false);
       setStatus("Connected. Speak to Chef George.");
@@ -1385,6 +1460,7 @@ useEffect(() => {
       );
     } catch (error) {
       console.error("[Avatar UI] Start error:", error);
+      liveAvatarSessionIdRef.current = null;
       setStatus("Could not start avatar. Please try again.");
       setShowSponsor(false);
       await endSessionTracking();
@@ -1400,6 +1476,8 @@ useEffect(() => {
     // End the visible session immediately.
     room?.disconnect();
     setRoom(null);
+    liveAvatarSessionIdRef.current = null;
+
     setShowSponsor(false);
     setStatus("Ready");
     setVideoKey((key) => key + 1);
