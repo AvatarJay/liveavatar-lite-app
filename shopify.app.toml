@@ -20,6 +20,6 @@ redirect_urls = []
 api_version = "2026-07"
 
 [app_proxy]
-url = "/api/shopify/proxy/bootstrap"
+url = "https://liveavatar-lite-app.vercel.app/api/shopify/proxy/bootstrap"
 prefix = "apps"
 subpath = "chefit-auth"
