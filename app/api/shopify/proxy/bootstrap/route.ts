@@ -76,6 +76,21 @@ export async function GET(request: Request) {
     );
   }
 
+const timestampValue = Number(timestamp);
+
+if (
+  !Number.isFinite(timestampValue) ||
+  Math.abs(Math.floor(Date.now() / 1000) - timestampValue) > 300
+) {
+  return NextResponse.json(
+    {
+      success: false,
+      error: "Expired Shopify proxy request.",
+    },
+    { status: 401 }
+  );
+}
+
   return NextResponse.json({
     success: true,
     message: "Shopify App Proxy signature verified.",
