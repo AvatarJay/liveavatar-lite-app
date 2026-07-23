@@ -66,6 +66,16 @@ export async function GET(request: Request) {
   const pathPrefix = url.searchParams.get("path_prefix");
   const timestamp = url.searchParams.get("timestamp");
 
+  if (!loggedInCustomerId) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: "Customer login required.",
+      },
+      { status: 401 }
+    );
+  }
+
   return NextResponse.json({
     success: true,
     message: "Shopify App Proxy signature verified.",
