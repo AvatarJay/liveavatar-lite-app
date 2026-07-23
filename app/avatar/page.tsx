@@ -1259,7 +1259,7 @@ useEffect(() => {
   return () => {
     window.removeEventListener("message", handleParentMessage);
   };
-}, [isStarting, room, showMicCheck]);
+}, [isStarting, room, showMicCheck, customerEmail]);
 
 
   useEffect(() => {
