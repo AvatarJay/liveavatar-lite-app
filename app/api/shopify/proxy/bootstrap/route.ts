@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { NextResponse } from "next/server";
+import { createLaunchToken } from "@/lib/auth/launch-token";
 
 export const runtime = "nodejs";
 
@@ -63,7 +64,6 @@ export async function GET(request: Request) {
   const loggedInCustomerId = url.searchParams.get(
     "logged_in_customer_id"
   );
-  const pathPrefix = url.searchParams.get("path_prefix");
   const timestamp = url.searchParams.get("timestamp");
 
   if (!loggedInCustomerId) {
@@ -76,30 +76,34 @@ export async function GET(request: Request) {
     );
   }
 
-const timestampValue = Number(timestamp);
+  const timestampValue = Number(timestamp);
 
-if (
-  !Number.isFinite(timestampValue) ||
-  Math.abs(Math.floor(Date.now() / 1000) - timestampValue) > 300
-) {
-  return NextResponse.json(
-    {
-      success: false,
-      error: "Expired Shopify proxy request.",
-    },
-    { status: 401 }
-  );
-}
+  if (
+    !Number.isFinite(timestampValue) ||
+    Math.abs(Math.floor(Date.now() / 1000) - timestampValue) > 300
+  ) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: "Expired Shopify proxy request.",
+      },
+      { status: 401 }
+    );
+  }
+
+  const launchToken = await createLaunchToken({
+    shop: shop!,
+    customerId: loggedInCustomerId,
+  });
 
   return NextResponse.json({
     success: true,
-    message: "Shopify App Proxy signature verified.",
+    message: "Launch token created.",
     authenticated: true,
+    launchToken,
     received: {
       shop,
-      logged_in_customer_id: loggedInCustomerId,
-      path_prefix: pathPrefix,
-      timestamp,
+      customerId: loggedInCustomerId,
     },
   });
 }
