@@ -1,12 +1,20 @@
 import { NextResponse } from "next/server";
 
+import { requireLaunchToken } from "@/lib/auth/require-launch-token";
 import { convertCreatorOutreach } from "@/lib/growth/convert-creator-outreach";
 import { supabase } from "@/lib/supabase";
 
+export const runtime = "nodejs";
+
 export async function POST(req: Request) {
+  const authentication = await requireLaunchToken(req);
+
+  if (!authentication.success) {
+    return authentication.response;
+  }
+
   try {
-    const { sponsorName, customerEmail } =
-      await req.json();
+    const { sponsorName, customerEmail } = await req.json();
 
     const normalizedEmail =
       typeof customerEmail === "string"
@@ -56,6 +64,10 @@ export async function POST(req: Request) {
     return NextResponse.json({
       sessionId: data.id,
       outreachConversion,
+      authenticatedCustomer: {
+        shop: authentication.identity.shop,
+        customerId: authentication.identity.customerId,
+      },
     });
   } catch (error) {
     console.error(

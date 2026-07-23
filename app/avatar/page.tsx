@@ -112,6 +112,7 @@ export default function AvatarPage() {
   const animationRef = useRef<number | null>(null);
   const perfStartRef = useRef<number>(0);
   const gatheringTimeoutRef = useRef<number | null>(null);
+  const launchTokenRef = useRef<string | null>(null);
 
   const turnPerformanceRef = useRef<TurnPerformance>({
     eventId: "",
@@ -296,29 +297,42 @@ const timerColor =
   }
 
   async function startSessionTracking(sponsorName: string) {
-    try {
-      const res = await fetch("/api/sessions/start", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sponsorName,
-          customerEmail,
-        }),
-      });
+  const launchToken = launchTokenRef.current;
 
-      const data = await res.json();
+  if (!launchToken) {
+    console.error(
+      "[Session Tracking Start Failed] Missing launch token"
+    );
 
-      if (!res.ok) {
-        console.error("[Session Tracking Start Failed]", data);
-        return null;
-      }
+    return null;
+  }
 
-      return data.sessionId as string;
-    } catch (error) {
-      console.error("[Session Tracking Start Error]", error);
+  try {
+    const res = await fetch("/api/sessions/start", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${launchToken}`,
+      },
+      body: JSON.stringify({
+        sponsorName,
+        customerEmail,
+      }),
+    });
+
+    const data = await res.json();
+
+    if (!res.ok) {
+      console.error("[Session Tracking Start Failed]", data);
       return null;
     }
+
+    return data.sessionId as string;
+  } catch (error) {
+    console.error("[Session Tracking Start Error]", error);
+    return null;
   }
+}
 
   async function endSessionTracking() {
   const sessionId = trackedSessionIdRef.current;
@@ -1209,7 +1223,28 @@ useEffect(() => {
       return;
     }
 
-    console.log("[Chef-iT] Start session message received");
+    const launchToken = event.data?.launchToken;
+
+    if (
+      typeof launchToken !== "string" ||
+      !launchToken.trim()
+    ) {
+      console.error(
+        "[Chef-iT] Start session message missing launch token"
+      );
+
+      setStatus(
+        "Secure session authorization failed. Please try again."
+      );
+
+      return;
+    }
+
+    console.log(
+      "[Chef-iT] Authenticated start session message received"
+    );
+
+    launchTokenRef.current = launchToken.trim();
 
     if (isStarting || room || showMicCheck) {
       return;
@@ -1224,7 +1259,8 @@ useEffect(() => {
   return () => {
     window.removeEventListener("message", handleParentMessage);
   };
-}, [isStarting, room, showMicCheck, customerEmail]);
+}, [isStarting, room, showMicCheck]);
+
 
   useEffect(() => {
   if (!room) {
